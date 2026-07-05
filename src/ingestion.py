@@ -4,7 +4,7 @@ from src.config import DATA_DIR,CHANNELS
 
 fastf1.Cache.enable_cache(str(DATA_DIR))
 
-def load_clean_laps(year , gp , session_type , driver):
+def load_clean_session_laps(year , gp , session_type , driver):
     print(f"Loading {year} {gp} - Session: {session_type} for Driver: {driver}...")
     session = fastf1.get_session(year, gp, session_type)
     session.load(telemetry=True, laps=True, weather=False)
