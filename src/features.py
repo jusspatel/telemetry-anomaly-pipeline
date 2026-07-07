@@ -45,19 +45,20 @@ def extract_raw_windows(df_10hz: pd.DataFrame, window_size: int = WINDOW_SIZE, s
 
 def build_stage1_features(raw_windows: np.ndarray) -> np.ndarray:
     """
-    Converts (Batch, Time=20, Channels=5) -> (Batch, 35 flat statistical features).
-    Stats: Mean, Var, Min, Max, Q25, Q50, Q75 per channel.
+    Converts (Batch, Channels=5, Time=20) -> (Batch, 35 flat statistical features).
+    Stats: Mean, Var, Min, Max, Q25, Q50, Q75 calculated OVER TIME (axis=2) per channel.
     """
     if raw_windows.size == 0:
         return np.empty((0, len(CHANNELS) * 7))
         
-    mean_val = np.mean(raw_windows, axis=1)        # Shape: (Batch, 5)
-    var_val  = np.var(raw_windows, axis=1)         # Shape: (Batch, 5)
-    min_val  = np.min(raw_windows, axis=1)         # Shape: (Batch, 5)
-    max_val  = np.max(raw_windows, axis=1)         # Shape: (Batch, 5)
-    q25      = np.percentile(raw_windows, 25, axis=1)
-    q50      = np.percentile(raw_windows, 50, axis=1)
-    q75      = np.percentile(raw_windows, 75, axis=1)
+    # Notice we changed axis=1 to axis=2 so we calculate stats across the 20 timestamps!
+    mean_val = np.mean(raw_windows, axis=2)        # Shape: (Batch, 5)
+    var_val  = np.var(raw_windows, axis=2)         # Shape: (Batch, 5)
+    min_val  = np.min(raw_windows, axis=2)         # Shape: (Batch, 5)
+    max_val  = np.max(raw_windows, axis=2)         # Shape: (Batch, 5)
+    q25      = np.percentile(raw_windows, 25, axis=2)
+    q50      = np.percentile(raw_windows, 50, axis=2)
+    q75      = np.percentile(raw_windows, 75, axis=2)
     
     # Stack along third axis -> Shape: (Batch, 5 channels, 7 stats)
     stats_stacked = np.stack([mean_val, var_val, min_val, max_val, q25, q50, q75], axis=2)
@@ -67,12 +68,12 @@ def build_stage1_features(raw_windows: np.ndarray) -> np.ndarray:
 
 def build_stage2_tensors(raw_windows: np.ndarray) -> np.ndarray:
     """
-    Converts (Batch, Time=20, Channels=5) -> (Batch, Channels=5, Time=20).
-    Aligns with PyTorch 1D Convolutional input requirements.
+    Returns (Batch, Channels=5, Time=20).
+    sliding_window_view already outputs this exact PyTorch 1D Conv alignment!
     """
     if raw_windows.size == 0:
         return np.empty((0, len(CHANNELS), WINDOW_SIZE))
-    return np.transpose(raw_windows, (0, 2, 1))
+    return raw_windows  # Removed the unnecessary transpose!
 
 def generate_training_datasets(resampled_laps: List[pd.DataFrame]) -> Tuple[np.ndarray, np.ndarray]:
     """
