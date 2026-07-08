@@ -46,8 +46,8 @@ class TelemetryFaultInjector:
         end_idx = min(start_idx + duration_idx, len(corrupted))
         actual_duration = end_idx - start_idx
         
-        # Scale max drift relative to channel magnitude (e.g., 30% of max channel reading)
-        max_drift = np.max(np.abs(series)) * 0.30
+        # Scale max drift relative to channel magnitude (e.g., 50% of max channel reading)
+        max_drift = np.max(np.abs(series)) * 0.50
         drift_slope = np.linspace(0.0, max_drift, actual_duration)
         
         corrupted[start_idx:end_idx] += drift_slope
@@ -59,8 +59,8 @@ class TelemetryFaultInjector:
         end_idx = min(start_idx + duration_idx, len(corrupted))
         actual_duration = end_idx - start_idx
         
-        # Noise standard deviation set to 15% of channel variance
-        noise_std = np.std(series) * 0.15 if np.std(series) > 0 else 5.0
+        # Noise standard deviation set to 50% of channel variance
+        noise_std = np.std(series) * 0.50 if np.std(series) > 0 else 5.0
         noise = self.rng.normal(loc=0.0, scale=noise_std, size=actual_duration)
         
         corrupted[start_idx:end_idx] += noise

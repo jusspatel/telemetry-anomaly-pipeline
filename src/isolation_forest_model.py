@@ -98,3 +98,115 @@ class TelemetryAnomalyTriage:
         self.calibrated_threshold = data['threshold']
         self.is_fitted = True
         print(f"Stage 1 model loaded from: {filepath}")
+
+
+class PerChannelAnomalyTriage:
+    """
+    Trains one Isolation Forest per sensor channel (5 forests, each on 7 statistical features).
+    
+    Why: A single-channel fault (e.g., Speed dropout) only corrupts 7/35 features.
+    A single joint forest averages over all 35 features, diluting the anomaly signal.
+    Per-channel forests detect anomalies in ANY individual channel independently,
+    making single-sensor faults clearly separable from clean data.
+    """
+    
+    STATS_PER_CHANNEL = 7  # mean, var, min, max, q25, q50, q75
+    
+    def __init__(self, channel_names, n_estimators=100, max_samples=512,
+                 max_features=1.0, random_state=42):
+        self.channel_names = list(channel_names)
+        self.n_channels = len(self.channel_names)
+        self.random_state = random_state
+        
+        self.models = {}
+        for ch in self.channel_names:
+            self.models[ch] = IsolationForest(
+                n_estimators=n_estimators,
+                max_samples=max_samples,
+                max_features=max_features,
+                contamination='auto',
+                bootstrap=False,
+                n_jobs=-1,
+                random_state=random_state
+            )
+        self.thresholds = {ch: None for ch in self.channel_names}
+        self.is_fitted = False
+
+    def _split_features(self, X: np.ndarray) -> dict:
+        """Split (N, 35) -> dict of {channel_name: (N, 7)}."""
+        return {
+            ch: X[:, i * self.STATS_PER_CHANNEL : (i + 1) * self.STATS_PER_CHANNEL]
+            for i, ch in enumerate(self.channel_names)
+        }
+
+    def fit(self, X_train: np.ndarray):
+        """Train one Isolation Forest per channel. X_train shape: (N, 35)."""
+        print(f"Training {self.n_channels} Per-Channel Isolation Forests...")
+        channel_data = self._split_features(X_train)
+        for ch in self.channel_names:
+            self.models[ch].fit(channel_data[ch])
+            print(f"  -> {ch} forest fitted on {channel_data[ch].shape}")
+        self.is_fitted = True
+        print(" -> All per-channel forests fitted successfully!")
+
+    def score_per_channel(self, X: np.ndarray) -> dict:
+        """Returns {channel_name: anomaly_scores_array}. Higher = more anomalous."""
+        channel_data = self._split_features(X)
+        return {
+            ch: -self.models[ch].score_samples(channel_data[ch])
+            for ch in self.channel_names
+        }
+
+    def calibrate_thresholds(self, X_clean: np.ndarray, target_fpr_per_channel: float = 0.01):
+        """Set per-channel thresholds from clean data at a given FPR per channel."""
+        scores = self.score_per_channel(X_clean)
+        percentile = (1.0 - target_fpr_per_channel) * 100
+        print(f"Calibrating per-channel thresholds at {target_fpr_per_channel*100:.1f}% FPR each...")
+        for ch in self.channel_names:
+            self.thresholds[ch] = float(np.percentile(scores[ch], percentile))
+            print(f"  -> {ch} threshold: {self.thresholds[ch]:.4f}")
+
+    def triage_window(self, X_single: np.ndarray):
+        """
+        Score a single window of features (1, 35).
+        Returns: (is_anomalous, per_channel_scores_dict, suspect_channel_name)
+        """
+        scores = self.score_per_channel(X_single)
+        suspect = None
+        max_excess = -float('inf')
+        is_anomalous = False
+
+        for ch in self.channel_names:
+            score = float(scores[ch][0])
+            threshold = self.thresholds[ch]
+            if threshold is not None and score > threshold:
+                is_anomalous = True
+                excess = score - threshold
+                if excess > max_excess:
+                    max_excess = excess
+                    suspect = ch
+
+        per_ch = {ch: float(scores[ch][0]) for ch in self.channel_names}
+        return is_anomalous, per_ch, suspect
+
+    def save_model(self, filepath: Path):
+        """Persist all per-channel forests and thresholds."""
+        filepath = Path(filepath)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump({
+            'models': self.models,
+            'thresholds': self.thresholds,
+            'channel_names': self.channel_names,
+            'type': 'per_channel'
+        }, filepath)
+        print(f"Per-Channel Stage 1 model saved to: {filepath}")
+
+    def load_model(self, filepath: Path):
+        """Load per-channel forests and thresholds from disk."""
+        data = joblib.load(filepath)
+        self.models = data['models']
+        self.thresholds = data['thresholds']
+        self.channel_names = data['channel_names']
+        self.n_channels = len(self.channel_names)
+        self.is_fitted = True
+        print(f"Per-Channel Stage 1 model loaded from: {filepath}")
