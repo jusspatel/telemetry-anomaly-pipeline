@@ -56,6 +56,8 @@ class TelemetryAnomalyOrchestrator:
         # Extract normalization scaling arrays
         self.means = stage2_payload['channel_means'] # Shape: (1, 5, 1)
         self.stds = stage2_payload['channel_stds']   # Shape: (1, 5, 1)
+        difficulty_path = Path("models") / "clean_baseline_difficulty.npy"
+        self.difficulty_baseline = np.load(difficulty_path)  # Shape: (5,)
         print(" -> Stage 2 Loaded successfully with normalization parameters.")
 
     def calibrate_from_clean_windows(self, clean_windows: np.ndarray, target_fpr: float = 0.01):
@@ -106,15 +108,21 @@ class TelemetryAnomalyOrchestrator:
         # ------------------------------------------------------------------
         # CLEAN FIX: Calculate Mean Absolute Error directly in Pure Z-Score Space!
         # Every sensor has Variance = 1.0 here, so physical scale cannot skew attribution.
-        abs_errors = np.abs(
-            scaled_window[0] - reconstructed_scaled[0]
-        )  # Shape: (5, 20)
-        channel_mae = np.mean(abs_errors, axis=1)  # Shape: (5,)
+        abs_errors = np.abs(scaled_window[0] - reconstructed_scaled[0])
+
+        # 2. Extract PEAK error across time (axis=1) instead of averaging away spikes!
+        peak_errors = np.percentile(abs_errors, 95, axis=1)  # Shape: (5,)
+
+        # 3. Grade on a curve using your calibrated baseline difficulty
+        epsilon = 0.1
+        normalized_scores = peak_errors / (
+            self.difficulty_baseline + epsilon
+        )  # Shape: (5,)
         # ------------------------------------------------------------------
 
-        # Identify sensor with maximum residual error
+        # Identify sensor with maximum normalized residual score
         for idx, ch_name in enumerate(CHANNELS):
-          result["channel_residuals"][ch_name] = float(channel_mae[idx])
+          result["channel_residuals"][ch_name] = float(normalized_scores[idx])
 
         result["diagnosed_culprit"] = max(
             result["channel_residuals"], key=result["channel_residuals"].get
@@ -223,26 +231,53 @@ def run_rigorous_evaluation():
     precision = precision_score(y_true_binary, y_pred_binary, zero_division=0)
     recall = recall_score(y_true_binary, y_pred_binary, zero_division=0)
     f1 = f1_score(y_true_binary, y_pred_binary, zero_division=0)
-    
-    attribution_acc = (correct_attributions / total_true_fault_windows) * 100 if total_true_fault_windows > 0 else 0.0
-    
-    # Count predictions for context
+
+    # 1. How many true faults did Stage 1 actually catch? (True Positives)
+    stage1_true_positives = sum(
+        1
+        for i in range(len(y_true_binary))
+        if y_true_binary[i] == 1 and y_pred_binary[i] == 1
+    )
     total_alerts = sum(y_pred_binary)
-    total_true_faults = sum(y_true_binary)
-    
+    # 2. CONDITIONAL ACCURACY: How good is Stage 2 when handed a real fault?
+    conditional_attribution_acc = (
+        (correct_attributions / stage1_true_positives) * 100
+        if stage1_true_positives > 0
+        else 0.0
+    )
+
+    # 3. SYSTEM-WIDE ACCURACY: How often does the entire pipeline catch & diagnose a fault?
+    system_attribution_acc = (
+        (correct_attributions / total_true_fault_windows) * 100
+        if total_true_fault_windows > 0
+        else 0.0
+    )
+
     print("\n=======================================================")
     print("=== FINAL INDUSTRIAL RELIABILITY EVALUATION REPORT ===")
     print("=======================================================")
     print(f"Total Telemetry Windows Evaluated: {len(y_true_binary):,}")
     print(f"Total True Fault Windows Injected: {total_true_fault_windows:,}")
     print(f"Total Stage 1 Alerts Fired:        {total_alerts:,}")
+    print(f"Stage 1 True Positives Caught:     {stage1_true_positives:,}")
     print(f"\n--- STAGE 1: TRIAGE DETECTION PERFORMANCE ---")
     print(f" -> Precision:        {precision:.4f}  (How many alarms were real faults?)")
     print(f" -> Recall:           {recall:.4f}  (How many real faults did we catch?)")
     print(f" -> F1-Score:         {f1:.4f}  (Harmonic mean of precision & recall)")
     print(f"\n--- STAGE 2: DIAGNOSTIC ATTRIBUTION PERFORMANCE ---")
-    print(f" -> Culprit Localization Accuracy: {attribution_acc:.2f}%")
-    print(f"    (When a fault occurred, how often did TCN correctly name the broken sensor?)")
+    print(
+        f" -> Conditional Culprit Accuracy:  {conditional_attribution_acc:.2f}%"
+    )
+    print(
+        "    (When Stage 1 caught a real fault, how often did TCN name the"
+        " broken sensor?)"
+    )
+    print(
+        f" -> System-Wide Culprit Accuracy:  {system_attribution_acc:.2f}%"
+    )
+    print(
+        "    (End-to-end reliability across all 2,048 injected fault windows)"
+    )
     print("=======================================================\n")
 
 if __name__ == "__main__":
