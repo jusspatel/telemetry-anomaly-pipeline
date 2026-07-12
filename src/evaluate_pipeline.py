@@ -21,6 +21,22 @@ from src.isolation_forest_model import PerChannelAnomalyTriage
 from src.ingestion import load_clean_session_laps
 from src.preprocessing import process_all_laps
 
+import pandas as pd
+
+
+def apply_debounce_filter(
+    raw_alerts: np.ndarray, window_size: int = 3, min_active: int = 2
+) -> np.ndarray:
+  """Applies an M-out-of-N sliding window persistence rule to binary alerts.
+
+  Suppresses isolated 1-timestamp noise spikes while confirming sustained
+  faults.
+  """
+  alert_series = pd.Series(raw_alerts)
+  rolling_active_count = alert_series.rolling(
+      window=window_size, min_periods=1
+  ).sum()
+  return (rolling_active_count >= min_active).astype(int).to_numpy()
 class TelemetryAnomalyOrchestrator:
     """
     Master Inference Pipeline: Connects Stage 1 (Per-Channel iForest Triage)
