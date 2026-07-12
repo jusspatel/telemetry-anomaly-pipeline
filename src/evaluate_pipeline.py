@@ -93,34 +93,33 @@ class TelemetryAnomalyOrchestrator:
             
         # Step 4: If Anomalous, wake up Stage 2 TCN Autoencoder for diagnostics
         with torch.no_grad():
-            # Normalize input using baseline training parameters
-            scaled_window = (window_expanded - self.means) / self.stds
-            tensor_in = torch.tensor(scaled_window, dtype=torch.float32).to(self.device)
-            
-            # Reconstruct
-            reconstructed_tensor, _ = self.tcn(tensor_in)
-            
-            # Convert back to numpy and un-scale to get physical units
-            reconstructed_scaled = reconstructed_tensor.cpu().numpy()
-            reconstructed_physical = (reconstructed_scaled * self.stds) + self.means
-            
-        # Calculate per-channel Mean Absolute Error (MAE) across the 20 timestamps
-        epsilon_floor = 0.5
-        robust_denominator = self.stds[0] + epsilon_floor  # Shape: (5, 1)
+          # Normalize input using baseline training parameters
+          scaled_window = (window_expanded - self.means) / self.stds
+          tensor_in = torch.tensor(
+              scaled_window, dtype=torch.float32
+          ).to(self.device)
 
-        # Calculate error relative to stabilized variance
-        abs_errors = np.abs(window_expanded[0] - reconstructed_physical[0]) / (
-            robust_denominator
-        )
-        channel_mae = np.mean(abs_errors, axis=1) # Shape: (5,)
-        
+          # Reconstruct in normalized space
+          reconstructed_tensor, _ = self.tcn(tensor_in)
+          reconstructed_scaled = reconstructed_tensor.cpu().numpy()
+
+        # ------------------------------------------------------------------
+        # CLEAN FIX: Calculate Mean Absolute Error directly in Pure Z-Score Space!
+        # Every sensor has Variance = 1.0 here, so physical scale cannot skew attribution.
+        abs_errors = np.abs(
+            scaled_window[0] - reconstructed_scaled[0]
+        )  # Shape: (5, 20)
+        channel_mae = np.mean(abs_errors, axis=1)  # Shape: (5,)
+        # ------------------------------------------------------------------
+
         # Identify sensor with maximum residual error
         for idx, ch_name in enumerate(CHANNELS):
-            result['channel_residuals'][ch_name] = float(channel_mae[idx])
-            
-        result['diagnosed_culprit'] = max(result['channel_residuals'], key=result['channel_residuals'].get)
-        return result
+          result["channel_residuals"][ch_name] = float(channel_mae[idx])
 
+        result["diagnosed_culprit"] = max(
+            result["channel_residuals"], key=result["channel_residuals"].get
+        )
+        return result
 
 def run_rigorous_evaluation():
     print("\n=======================================================")
