@@ -23,20 +23,6 @@ from src.preprocessing import process_all_laps
 
 import pandas as pd
 
-
-def apply_debounce_filter(
-    raw_alerts: np.ndarray, window_size: int = 3, min_active: int = 2
-) -> np.ndarray:
-  """Applies an M-out-of-N sliding window persistence rule to binary alerts.
-
-  Suppresses isolated 1-timestamp noise spikes while confirming sustained
-  faults.
-  """
-  alert_series = pd.Series(raw_alerts)
-  rolling_active_count = alert_series.rolling(
-      window=window_size, min_periods=1
-  ).sum()
-  return (rolling_active_count >= min_active).astype(int).to_numpy()
 class TelemetryAnomalyOrchestrator:
     """
     Master Inference Pipeline: Connects Stage 1 (Per-Channel iForest Triage)
@@ -74,6 +60,9 @@ class TelemetryAnomalyOrchestrator:
         self.stds = stage2_payload['channel_stds']   # Shape: (1, 5, 1)
         difficulty_path = Path("models") / "clean_baseline_difficulty.npy"
         self.difficulty_baseline = np.load(difficulty_path)  # Shape: (5,)
+        self.alert_buffer = (
+            []
+        )
         print(" -> Stage 2 Loaded successfully with normalization parameters.")
 
     def calibrate_from_clean_windows(self, clean_windows: np.ndarray, target_fpr: float = 0.01):
@@ -95,7 +84,17 @@ class TelemetryAnomalyOrchestrator:
         stage1_feats = build_stage1_features(window_expanded)  # (1, 35)
         
         # Step 2: Per-Channel Stage 1 Triage
-        is_anomalous, channel_scores, suspect = self.stage1.triage_window(stage1_feats)
+        raw_alert, channel_scores, suspect = self.stage1.triage_window(
+            stage1_feats
+        )
+
+        # Record the raw alert in our rolling memory buffer
+        self.alert_buffer.append(int(raw_alert))
+        if len(self.alert_buffer) > 3:
+          self.alert_buffer.pop(0)  # Keep only the last 3 windows in memory
+
+        # Unanimous consent rule: require at least 2 out of 3 windows to be anomalous!
+        is_anomalous = sum(self.alert_buffer) >= 2
         
         result = {
             'stage1_scores': channel_scores,
