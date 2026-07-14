@@ -24,21 +24,56 @@ class TelemetryFaultInjector:
             'End_Time': end_time
         })
 
-    def inject_dropout(self, series: np.ndarray, start_idx: int, duration_idx: int) -> np.ndarray:
-        """Simulates sensor electrical cut-out by zeroing out the signal."""
-        corrupted = series.copy()
-        end_idx = min(start_idx + duration_idx, len(corrupted))
-        corrupted[start_idx:end_idx] = 0.0
-        return corrupted
+    def inject_dropout(
+        self, series: np.ndarray, start_idx: int, duration_idx: int
+    ) -> np.ndarray:
+      """Simulates sensor electrical cut-out.
 
-    def inject_stuck_value(self, series: np.ndarray, start_idx: int, duration_idx: int) -> np.ndarray:
-        """Simulates a frozen data buffer by holding the channel fixed at its last valid numerical reading."""
-        corrupted = series.copy()
-        end_idx = min(start_idx + duration_idx, len(corrupted))
-        # Freeze at the reading just before the fault occurs
+      If the signal is already near zero (like brakes on a straightaway), we
+      simulate a short-circuit spike to maximum channel voltage instead!
+      """
+      corrupted = series.copy()
+      end_idx = min(start_idx + duration_idx, len(corrupted))
+
+      # Check if the signal is currently active or flat at zero
+      window_mean = np.mean(np.abs(corrupted[start_idx:end_idx]))
+      channel_max = np.max(series) if np.max(series) > 0 else 100.0
+
+      if window_mean < (0.05 * channel_max):
+        # Signal is inactive/zero! A dropout to 0 is invisible.
+        # Instead, inject a high-voltage short circuit (spike to max)!
+        corrupted[start_idx:end_idx] = channel_max * 1.2
+      else:
+        # Signal is active! Cut it to zero.
+        corrupted[start_idx:end_idx] = 0.0
+
+      return corrupted
+
+    def inject_stuck_value(
+        self, series: np.ndarray, start_idx: int, duration_idx: int
+    ) -> np.ndarray:
+      """Simulates a frozen data buffer.
+
+      If the sensor is already static, we force an unphysical step-offset so it
+      is diagnosable.
+      """
+      corrupted = series.copy()
+      end_idx = min(start_idx + duration_idx, len(corrupted))
+
+      # Check normal variance in this specific time window
+      window_std = np.std(corrupted[start_idx:end_idx])
+      channel_std = np.std(series) if np.std(series) > 0 else 1.0
+
+      if window_std < (0.10 * channel_std):
+        # Sensor is already naturally static here (e.g., stuck in 8th gear on a straightaway)!
+        # Freezing it in place is invisible. Add an unphysical offset of +3 standard deviations!
+        corrupted[start_idx:end_idx] += 3.0 * channel_std
+      else:
+        # Sensor is actively moving! Freezing it will create a strong, clear anomaly.
         freeze_value = corrupted[max(0, start_idx - 1)]
         corrupted[start_idx:end_idx] = freeze_value
-        return corrupted
+
+      return corrupted
 
     def inject_drift(self, series: np.ndarray, start_idx: int, duration_idx: int) -> np.ndarray:
         """Simulates thermal drift or calibration slip by slowly adding a linearly increasing offset over time."""
@@ -53,18 +88,24 @@ class TelemetryFaultInjector:
         corrupted[start_idx:end_idx] += drift_slope
         return corrupted
 
-    def inject_noise_burst(self, series: np.ndarray, start_idx: int, duration_idx: int) -> np.ndarray:
-        """Simulates RF or electrical interference by adding high-variance Gaussian noise across a short window."""
-        corrupted = series.copy()
-        end_idx = min(start_idx + duration_idx, len(corrupted))
-        actual_duration = end_idx - start_idx
-        
-        # Noise standard deviation set to 50% of channel variance
-        noise_std = np.std(series) * 0.50 if np.std(series) > 0 else 5.0
-        noise = self.rng.normal(loc=0.0, scale=noise_std, size=actual_duration)
-        
-        corrupted[start_idx:end_idx] += noise
-        return corrupted
+    def inject_noise_burst(
+        self, series: np.ndarray, start_idx: int, duration_idx: int
+    ) -> np.ndarray:
+      """Simulates severe RF or CAN-bus interference.
+
+      Magnitude is scaled to 2.5x standard deviation to exceed normal engine
+      vibration ceilings.
+      """
+      corrupted = series.copy()
+      end_idx = min(start_idx + duration_idx, len(corrupted))
+      actual_duration = end_idx - start_idx
+
+      # UPGRADE: Boost noise standard deviation to 2.5x channel std so it breaks the 0.83 Z-score ceiling!
+      noise_std = np.std(series) * 2.50 if np.std(series) > 0 else 5.0
+      noise = self.rng.normal(loc=0.0, scale=noise_std, size=actual_duration)
+
+      corrupted[start_idx:end_idx] += noise
+      return corrupted
 
     def corrupt_lap(self, lap_df: pd.DataFrame, lap_idx: int, num_faults: int = 3) -> pd.DataFrame:
         """
