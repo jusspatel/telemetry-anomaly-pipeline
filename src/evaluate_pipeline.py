@@ -321,7 +321,49 @@ from src.ingestion import load_clean_session_laps
 from src.isolation_forest_model import PerChannelAnomalyTriage
 from src.preprocessing import process_all_laps
 
+def compute_cusum_drift(
+    lap_matrix_zscore: np.ndarray,
+    slack_k: float = 0.50,
+    alarm_h: float = 4.00,
+) -> np.ndarray:
+  """Calculates continuous CUSUM drift accumulation across an entire lap.
 
+  Args:
+      lap_matrix_zscore: Normalized telemetry array of shape (N_timestamps,
+        5_channels). Because data is in Z-score space, baseline mean mu_0 == 0.0
+        and std == 1.0!
+      slack_k: Noise allowance in standard deviations (ignores curb vibration
+        below this).
+      alarm_h: Alarm ceiling in standard deviations (triggers fault if
+        accumulator exceeds this).
+
+  Returns:
+      1D boolean array of shape (N_timestamps,) where True indicates confirmed
+      drift.
+  """
+  N_time, N_channels = lap_matrix_zscore.shape
+
+  # Accumulator bucket for each of the 5 channels -> Shape: (5,)
+  S_pos = np.zeros(N_channels)
+  S_neg = np.zeros(N_channels)
+
+  # Array to store timestamp-level drift alarms -> Shape: (N_time,)
+  drift_alarms = np.zeros(N_time, dtype=int)
+
+  for t in range(N_time):
+    x_t = lap_matrix_zscore[t]  # Current readings for all 5 sensors
+
+    # Track upward drift (e.g., overheating brake or stuck throttle climbing)
+    S_pos = np.maximum(0.0, S_pos + x_t - slack_k)
+
+    # Track downward drift (e.g., dropping oil pressure or voltage loss)
+    S_neg = np.maximum(0.0, S_neg - x_t - slack_k)
+
+    # If ANY of the 5 sensors breach the alarm ceiling h, flag this timestamp!
+    if np.any(S_pos > alarm_h) or np.any(S_neg > alarm_h):
+      drift_alarms[t] = 1
+
+  return drift_alarms
 class TelemetryAnomalyOrchestrator:
   """Master Inference Pipeline: Connects Stage 1 (Per-Channel & Physics iForest
 
@@ -533,22 +575,48 @@ def run_rigorous_evaluation():
     # Step B: Build 41-column Stage 1 feature matrix for ALL windows simultaneously
     stage1_feats = build_stage1_features(windows)  # Shape: (N_windows, 41)
 
-    # Step C: Vectorized Stage 1 Triage across all 6 forests simultaneously
+# =========================================================================
+    # Step C: Dual-Engine Triage (Isolation Forest Spikes + CUSUM Drift!)
+    # =========================================================================
+    # 1. Score spatial outliers across all 6 monitored Isolation Forests
     scores_dict = orchestrator.stage1.score_per_channel(stage1_feats)
 
-    # Determine which windows crossed threshold across any monitored entity (sensors + physics)
-    raw_alerts = np.zeros(N_windows, dtype=int)
+    raw_iforest_alerts = np.zeros(N_windows, dtype=int)
     for entity in orchestrator.stage1.monitored_entities:
       threshold = orchestrator.stage1.thresholds[entity]
       if threshold is not None:
-        raw_alerts |= (scores_dict[entity] > threshold).astype(int)
+        raw_iforest_alerts |= (scores_dict[entity] > threshold).astype(int)
 
-    # Step D: Inline Vectorized 2-out-of-3 Debounce Filter (Replaces sequential pop/append!)
+    # 2. NEW: Calculate continuous CUSUM drift across the entire lap array!
+    # We normalize the raw lap matrix into Z-score space using Stage 2 scalers
+    lap_zscore = (raw_matrix - orchestrator.means[0].T) / orchestrator.stds[0].T
+    lap_drift_alarms = compute_cusum_drift(
+        lap_zscore, slack_k=1.50, alarm_h=10.00
+    )
+
+    # Convert timestamp-level drift alarms into window-level alarms
+    # If any timestamp inside a 20-step sliding window has drift, flag the window!
+    window_drift_alarms = (
+        pd.Series(lap_drift_alarms)
+        .rolling(window=WINDOW_SIZE, min_periods=1)
+        .max()
+        .values[:N_windows]
+        .astype(int)
+    )
+
+    # 3. Combine both engines: Alert fires if iForest OR CUSUM catches the fault!
+    combined_raw_alerts = raw_iforest_alerts | window_drift_alarms
+
+    # Step D: Inline Vectorized 2-out-of-3 Debounce Filter
     rolling_sums = (
-        pd.Series(raw_alerts).rolling(window=3, min_periods=1).sum().values
+        pd.Series(combined_raw_alerts)
+        .rolling(window=3, min_periods=1)
+        .sum()
+        .values
     )
     debounced_alerts = (rolling_sums >= 2).astype(int)
     y_pred_binary.extend(debounced_alerts.tolist())
+
 
     # Step E: Ground Truth Matching (Fast time-span alignment)
     lap_faults = ground_truth_log[ground_truth_log["Lap_ID"] == lap_idx]
@@ -566,7 +634,6 @@ def run_rigorous_evaluation():
 
     y_true_binary.extend(lap_true_binary.tolist())
 
-    # Step F: VECTORIZED STAGE 2 PYTORCH INFERENCE
     # Step F: VECTORIZED STAGE 2 INFERENCE WITH LOCO OCCLUSION
     anomalous_indices = np.where(debounced_alerts == 1)[0]
 
