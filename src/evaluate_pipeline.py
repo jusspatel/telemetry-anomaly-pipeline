@@ -586,7 +586,9 @@ def run_rigorous_evaluation():
 
       # 2. Calculate Peak Z-Score residuals across time (axis=2) in Z-Score space
       abs_errors = np.abs(scaled_batch - reconstructed_scaled)  # (Batch, 5, 20)
-      peak_errors = np.percentile(abs_errors, 95, axis=2)  # Shape: (Batch, 5)
+      peak_errors = np.sqrt(
+          np.mean(abs_errors**2, axis=2)
+      )  # Shape: (Batch, 5)
 
       # 3. Grade against calibrated baseline difficulty
       epsilon = 0.1
