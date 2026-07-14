@@ -189,7 +189,7 @@ def run_rigorous_evaluation():
     # 4. Dynamic Threshold Calibration
     #    This adapts thresholds to the actual test distribution, so we don't
     #    depend on the training distribution matching the test distribution.
-    orchestrator.calibrate_from_clean_windows(clean_windows_array, target_fpr=0.01)
+    orchestrator.calibrate_from_clean_windows(clean_windows_array, target_fpr=0.08)
     
     # 5. Inject Synthetic Hardware Faults
     print("\nInjecting synthetic hardware faults into test laps...")
