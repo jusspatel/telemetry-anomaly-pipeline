@@ -50,12 +50,12 @@ def train_stage2_autoencoder():
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
     
     # 5. Initialize the Dilated Causal TCN Autoencoder
-    model = TCNAutoencoder(num_channels=5, latent_dim=2, kernel_size=3).to(device)
+    model = TCNAutoencoder(num_channels=5, latent_dim=3, kernel_size=3).to(device)
     
     # Optimizer and Loss Function
     # We use Mean Squared Error (MSE) to penalize large reconstruction failures
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-    criterion = nn.MSELoss()
+    criterion = nn.HuberLoss(delta=1.0)
     
     epochs = 40
     print(f"\nBeginning training loop for {epochs} epochs...")
@@ -101,7 +101,7 @@ def train_stage2_autoencoder():
         'channel_stds': channel_stds,
         'architecture_config': {
             'num_channels': 5,
-            'latent_dim': 2,
+            'latent_dim': 3,
             'kernel_size': 3
         }
     }
