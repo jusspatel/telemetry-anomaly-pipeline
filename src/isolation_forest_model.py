@@ -136,9 +136,9 @@ class PerChannelAnomalyTriage:
   def __init__(
       self,
       channel_names,
-      n_estimators=100,
-      max_samples=512,
-      max_features=1.0,
+      n_estimators=200,
+      max_samples=1024,
+      max_features=0.85,
       random_state=42,
   ):
     self.base_channels = list(channel_names)

@@ -67,14 +67,15 @@ def calibrate_clean_baseline_difficulty():
             abs_errors = np.abs(batch_slice - reconstructed_scaled)
             
             # Extract peak error across time (axis=-1) using 95th percentile
-            peak_errors = np.percentile(abs_errors, 95, axis=-1)  # Shape: (Batch, 5)
-            all_peak_errors.append(peak_errors)
-            
-    # Concatenate all processed batches: Shape (16184, 5)
-    master_peak_errors = np.concatenate(all_peak_errors, axis=0)
-    
-    # 4. Calculate the 95th Percentile across the entire clean dataset for each channel!
-    clean_baseline_difficulty = np.percentile(master_peak_errors, 95, axis=0)  # Shape: (5,)
+# CHANGE THIS: Don't take the 95th percentile across time! Take the Mean Absolute Error!
+            # abs_errors shape: (Batch, 5, 20)
+            mean_errors = np.mean(abs_errors, axis=-1)  # Shape: (Batch, 5)
+            all_peak_errors.append(mean_errors)
+
+    master_mean_errors = np.concatenate(all_peak_errors, axis=0)
+
+    # Calculate the TRUE expected baseline mean across the entire clean dataset!
+    clean_baseline_difficulty = np.mean(master_mean_errors, axis=0)  # Shape: (5,)# Shape: (5,)
     
     print("\n--- CALIBRATED CLEAN BASELINE DIFFICULTY VECTOR ---")
     for idx, ch in enumerate(CHANNELS):
