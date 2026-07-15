@@ -591,7 +591,7 @@ def run_rigorous_evaluation():
     # We normalize the raw lap matrix into Z-score space using Stage 2 scalers
     lap_zscore = (raw_matrix - orchestrator.means[0].T) / orchestrator.stds[0].T
     lap_drift_alarms = compute_cusum_drift(
-        lap_zscore, slack_k=1.50, alarm_h=10.00
+        lap_zscore, slack_k=1.05, alarm_h=7.50
     )
 
     # Convert timestamp-level drift alarms into window-level alarms
@@ -635,34 +635,32 @@ def run_rigorous_evaluation():
     y_true_binary.extend(lap_true_binary.tolist())
 
     # Step F: VECTORIZED STAGE 2 INFERENCE WITH LOCO OCCLUSION
+# Step F: VECTORIZED STAGE 2 INFERENCE VIA CAUSAL ERROR REDUCTION RATIO (CERR)
     anomalous_indices = np.where(debounced_alerts == 1)[0]
 
     if len(anomalous_indices) > 0:
-      # 1. Gather all flagged anomalous windows -> Shape: (Batch, 5, 20)
       batch_windows = windows[anomalous_indices]
       Batch_Size = len(batch_windows)
 
       with torch.no_grad():
-        # Normalize the raw batch simultaneously
         scaled_batch = (batch_windows - orchestrator.means) / orchestrator.stds
         tensor_in = torch.tensor(scaled_batch, dtype=torch.float32).to(
             orchestrator.device
         )
 
-        # Baseline forward pass (with all 5 engineers in the room!)
+        # 1. Baseline forward pass -> Calculate total system error across all 5 channels
         base_recon, _ = orchestrator.tcn(tensor_in)
         base_errors = (scaled_batch - base_recon.cpu().numpy()) ** 2
-        base_total_error = np.sum(
+        base_total_system_error = np.sum(
             base_errors, axis=(1, 2)
-        )  # Total system error -> (Batch,)
+        )  # Shape: (Batch,)
 
-        # 2. LOCO LOOP: Kick each channel out one-by-one and measure system recovery
-        error_reduction_matrix = np.zeros((Batch_Size, len(CHANNELS)))
+        # 2. CERR Matrix -> What percentage of total system error disappears when channel `c` is removed?
+        cerr_matrix = np.zeros((Batch_Size, len(CHANNELS)))
 
         for c_idx in range(len(CHANNELS)):
           occluded_batch = scaled_batch.copy()
-          # 0.0 in Z-score space is exact baseline mean (kicking sensor out of the math!)
-          occluded_batch[:, c_idx, :] = 0.0
+          occluded_batch[:, c_idx, :] = 0.0  # Excise channel from bottleneck
 
           occ_tensor = torch.tensor(
               occluded_batch, dtype=torch.float32
@@ -670,20 +668,17 @@ def run_rigorous_evaluation():
           occ_recon, _ = orchestrator.tcn(occ_tensor)
 
           occ_errors = (occluded_batch - occ_recon.cpu().numpy()) ** 2
-          occ_total_error = np.sum(occ_errors, axis=(1, 2))  # (Batch,)
+          occ_total_system_error = np.sum(occ_errors, axis=(1, 2))  # (Batch,)
 
-          # How much did removing sensor `c_idx` heal the system?
-          # High positive drop = removing this sensor fixed the bottleneck smearing!
-          error_reduction_matrix[:, c_idx] = base_total_error - occ_total_error
+          # CERR = (Baseline Error - Occluded Error) / Baseline Error (Percentage Healing!)
+          epsilon = 1e-5
+          cerr_score = (
+              base_total_system_error - occ_total_system_error
+          ) / (base_total_system_error + epsilon)
+          cerr_matrix[:, c_idx] = cerr_score
 
-      # 3. Grade against calibrated baseline difficulty
-      epsilon = 0.1
-      normalized_loco_scores = error_reduction_matrix / (
-          orchestrator.difficulty_baseline + epsilon
-      )
-
-      # 4. The diagnosed culprit is the sensor that caused MAXIMUM error reduction when removed!
-      diagnosed_indices = np.argmax(normalized_loco_scores, axis=1)  # (Batch,)
+      # 3. Diagnosed culprit is the sensor that produced the MAXIMUM percentage system recovery when removed!
+      diagnosed_indices = np.argmax(cerr_matrix, axis=1)  # (Batch,)
 
       # Step G: Grade attributions against ground truth
       for idx_in_batch, w_idx in enumerate(anomalous_indices):
