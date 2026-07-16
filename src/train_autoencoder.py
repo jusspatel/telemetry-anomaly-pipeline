@@ -250,7 +250,7 @@ def train_stage2_autoencoder():
   )
 
   # 6. Initialize the Dilated Causal TCN Autoencoder
-  # Suggestion 5: Bottleneck to force error spikes
+  # Reverted: Strict bottleneck to force error spikes and prevent cross-talk
   model = TCNAutoencoder(num_channels=5, latent_dim=3, kernel_size=3).to(
       device
   )
@@ -299,7 +299,12 @@ def train_stage2_autoencoder():
       else:
         loss_class = torch.tensor(0.0, device=device)
 
-      total_loss = loss_recon + classification_weight * loss_class
+      # Total Variation (TV) Penalty on Reconstruction
+      # Forces the network to output smooth physical curves rather than jagged noise
+      tv_lambda = 0.05
+      loss_tv = torch.mean(torch.abs(reconstructed[:, :, 1:] - reconstructed[:, :, :-1]))
+
+      total_loss = loss_recon + classification_weight * loss_class + tv_lambda * loss_tv
 
       total_loss.backward()
       optimizer.step()
