@@ -128,6 +128,30 @@ from src.config import DATA_DIR, CHANNELS
 from src.fault_injection import TelemetryFaultInjector
 
 
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for multiclass classification.
+    Focuses the optimizer on hard-to-classify examples (like subtle drifts)
+    by down-weighting the loss from well-classified examples.
+    """
+    def __init__(self, alpha: float = 1.0, gamma: float = 2.0, reduction: str = 'mean'):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        ce_loss = nn.functional.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
+
+
 def _inject_faults_for_training(
     clean_windows: np.ndarray, fault_probability: float = 0.50, seed: int = 123
 ) -> tuple:
@@ -234,13 +258,13 @@ def train_stage2_autoencoder():
   # Optimizer, Loss Functions, and Learning Rate Scheduler
   optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
   recon_criterion = nn.HuberLoss(delta=1.0)
-  class_criterion = nn.CrossEntropyLoss()
+  class_criterion = FocalLoss(gamma=2.0)  # Replaced CrossEntropy with Focal Loss
   classification_weight = 1.0  # Safe to increase: error_head is detached from reconstruction
 
-  # Suggestion 4: Increased epochs and lower LR floor
+  # Increased epochs and use ReduceLROnPlateau to prevent early stalling
   epochs = 100
-  scheduler = optim.lr_scheduler.CosineAnnealingLR(
-      optimizer, T_max=epochs, eta_min=1e-7
+  scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+      optimizer, mode='min', factor=0.5, patience=20, min_lr=1e-6
   )
 
   print(f"\nBeginning fault-aware training loop for {epochs} epochs...")
@@ -285,12 +309,13 @@ def train_stage2_autoencoder():
       epoch_class_loss += loss_class.item() * bs
       epoch_total_loss += total_loss.item() * bs
 
-    scheduler.step()
-
     avg_recon = epoch_recon_loss / len(dataset)
     avg_class = epoch_class_loss / len(dataset)
     avg_total = epoch_total_loss / len(dataset)
-    current_lr = scheduler.get_last_lr()[0]
+    
+    # Step the learning rate scheduler based on total loss
+    scheduler.step(avg_total)
+    current_lr = optimizer.param_groups[0]['lr']
 
     if epoch % 10 == 0 or epoch == 1:
       print(
