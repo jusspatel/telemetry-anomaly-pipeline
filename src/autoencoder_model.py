@@ -225,12 +225,12 @@ class ResidualBlock(nn.Module):
 
 
 class TCNAutoencoder(nn.Module):
-  """Dilated Causal TCN Autoencoder with widened capacity (5 -> 32 -> 16 -> 4)."""
+  """Dilated Causal TCN Autoencoder with widened capacity (5 -> 32 -> 16 -> 6)."""
 
   def __init__(
       self,
       num_channels: int = 5,
-      latent_dim: int = 4,  # <-- UPGRADED: Was 2 (Decouples drivetrain cross-talk)
+      latent_dim: int = 6,  # <-- UPGRADED: Widened from 4 for better channel-specific preservation
       kernel_size: int = 3,
       dropout_rate: float = 0.1,
   ):
@@ -240,7 +240,7 @@ class TCNAutoencoder(nn.Module):
     self.latent_dim = latent_dim
 
     # =========================================================================
-    # ENCODER: Widen filters to 32 -> 16 -> 4
+    # ENCODER: Widen filters to 32 -> 16 -> 6
     # =========================================================================
     self.enc_block1 = ResidualBlock(
         num_channels, 32, kernel_size, dilation=1, dropout_rate=dropout_rate
@@ -253,7 +253,7 @@ class TCNAutoencoder(nn.Module):
     )
 
     # =========================================================================
-    # DECODER: Mirror encoder expansion 4 -> 16 -> 32 -> 5
+    # DECODER: Mirror encoder expansion 6 -> 16 -> 32 -> 5
     # =========================================================================
     self.dec_bottleneck = ResidualBlock(
         latent_dim,
@@ -267,7 +267,20 @@ class TCNAutoencoder(nn.Module):
     )
     self.dec_out = CausalConv1d(32, num_channels, kernel_size=1, dilation=1)
 
-  def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    # =========================================================================
+    # FAULT CLASSIFIER HEAD (Suggestion 6): Predicts which channel is faulty
+    # Global Average Pool over time -> Linear -> GELU -> Dropout -> Linear
+    # =========================================================================
+    self.fault_head = nn.Sequential(
+        nn.AdaptiveAvgPool1d(1),  # (Batch, latent_dim, Time) -> (Batch, latent_dim, 1)
+        nn.Flatten(),             # (Batch, latent_dim)
+        nn.Linear(latent_dim, 16),
+        nn.GELU(),
+        nn.Dropout(0.2),
+        nn.Linear(16, num_channels),  # Output: 5-class logits
+    )
+
+  def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     e1 = self.enc_block1(x)
     e2 = self.enc_block2(e1)
     latent = self.enc_bottleneck(e2)
@@ -276,7 +289,14 @@ class TCNAutoencoder(nn.Module):
     d2 = self.dec_block1(d1)
     reconstructed = self.dec_out(d2)
 
-    return reconstructed, latent
+    # Fault classification from latent representation
+    fault_logits = self.fault_head(latent)  # Shape: (Batch, num_channels)
+
+    return reconstructed, latent, fault_logits
+
+  def classify_fault(self, latent: torch.Tensor) -> torch.Tensor:
+    """Runs latent through the fault classifier head. Returns logits (Batch, num_channels)."""
+    return self.fault_head(latent)
 
   def localize_fault(
       self,

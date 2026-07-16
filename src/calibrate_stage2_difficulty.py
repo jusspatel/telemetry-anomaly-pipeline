@@ -60,7 +60,7 @@ def calibrate_clean_baseline_difficulty():
             tensor_in = torch.tensor(batch_slice, dtype=torch.float32).to(device)
             
             # Reconstruct
-            reconstructed_tensor, _ = tcn(tensor_in)
+            reconstructed_tensor, _, _ = tcn(tensor_in)
             reconstructed_scaled = reconstructed_tensor.cpu().numpy()
             
             # Calculate absolute Z-score errors for this batch: Shape (Batch, 5, 20)

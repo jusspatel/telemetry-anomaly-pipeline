@@ -467,7 +467,7 @@ class TelemetryAnomalyOrchestrator:
       tensor_in = torch.tensor(scaled_window, dtype=torch.float32).to(
           self.device
       )
-      reconstructed_tensor, _ = self.tcn(tensor_in)
+      reconstructed_tensor, _, _ = self.tcn(tensor_in)
       reconstructed_scaled = reconstructed_tensor.cpu().numpy()
 
     abs_errors = np.abs(scaled_window[0] - reconstructed_scaled[0])
@@ -634,8 +634,7 @@ def run_rigorous_evaluation():
 
     y_true_binary.extend(lap_true_binary.tolist())
 
-    # Step F: VECTORIZED STAGE 2 INFERENCE WITH LOCO OCCLUSION
-# Step F: VECTORIZED STAGE 2 INFERENCE VIA CAUSAL ERROR REDUCTION RATIO (CERR)
+    # Step F: VECTORIZED STAGE 2 INFERENCE VIA IMPROVED CERR
     anomalous_indices = np.where(debounced_alerts == 1)[0]
 
     if len(anomalous_indices) > 0:
@@ -648,36 +647,45 @@ def run_rigorous_evaluation():
             orchestrator.device
         )
 
-        # 1. Baseline forward pass -> Calculate total system error across all 5 channels
-        base_recon, _ = orchestrator.tcn(tensor_in)
-        base_errors = (scaled_batch - base_recon.cpu().numpy()) ** 2
-        base_total_system_error = np.sum(
-            base_errors, axis=(1, 2)
-        )  # Shape: (Batch,)
+        # 1. Baseline forward pass -> Per-channel reconstruction error
+        base_recon, _, _ = orchestrator.tcn(tensor_in)
+        base_recon_np = base_recon.cpu().numpy()
+        # Per-channel error: sum of squared errors across time for each channel
+        base_per_channel_error = np.sum(
+            (scaled_batch - base_recon_np) ** 2, axis=2
+        )  # Shape: (Batch, 5)
 
-        # 2. CERR Matrix -> What percentage of total system error disappears when channel `c` is removed?
+        # 2. Improved CERR: Mean-imputation occlusion + error measured against ORIGINAL
         cerr_matrix = np.zeros((Batch_Size, len(CHANNELS)))
 
         for c_idx in range(len(CHANNELS)):
           occluded_batch = scaled_batch.copy()
-          occluded_batch[:, c_idx, :] = 0.0  # Excise channel from bottleneck
+          # Fix 3: Mean-imputation instead of zero-occlusion
+          # Replace channel with its per-window time-mean (preserves DC, removes dynamics)
+          channel_means = np.mean(scaled_batch[:, c_idx, :], axis=1, keepdims=True)  # (Batch, 1)
+          occluded_batch[:, c_idx, :] = channel_means  # Broadcast across time
 
           occ_tensor = torch.tensor(
               occluded_batch, dtype=torch.float32
           ).to(orchestrator.device)
-          occ_recon, _ = orchestrator.tcn(occ_tensor)
+          occ_recon, _, _ = orchestrator.tcn(occ_tensor)
+          occ_recon_np = occ_recon.cpu().numpy()
 
-          occ_errors = (occluded_batch - occ_recon.cpu().numpy()) ** 2
-          occ_total_system_error = np.sum(occ_errors, axis=(1, 2))  # (Batch,)
+          # Fix 1: Measure error against ORIGINAL scaled_batch, not occluded
+          occ_per_channel_error = np.sum(
+              (scaled_batch - occ_recon_np) ** 2, axis=2
+          )  # Shape: (Batch, 5)
 
-          # CERR = (Baseline Error - Occluded Error) / Baseline Error (Percentage Healing!)
-          epsilon = 1e-5
-          cerr_score = (
-              base_total_system_error - occ_total_system_error
-          ) / (base_total_system_error + epsilon)
-          cerr_matrix[:, c_idx] = cerr_score
+          # Fix 2: Per-channel healing — how much did OTHER channels' errors drop?
+          # Mask out the occluded channel itself (its error will increase, which is expected)
+          healing = base_per_channel_error - occ_per_channel_error  # (Batch, 5)
+          # Sum healing across only the NON-occluded channels
+          mask = np.ones(len(CHANNELS), dtype=bool)
+          mask[c_idx] = False
+          cross_channel_healing = np.sum(healing[:, mask], axis=1)  # (Batch,)
+          cerr_matrix[:, c_idx] = cross_channel_healing
 
-      # 3. Diagnosed culprit is the sensor that produced the MAXIMUM percentage system recovery when removed!
+      # 3. Diagnosed culprit = channel whose removal healed the other channels most
       diagnosed_indices = np.argmax(cerr_matrix, axis=1)  # (Batch,)
 
       # Step G: Grade attributions against ground truth

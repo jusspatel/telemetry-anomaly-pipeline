@@ -124,11 +124,61 @@ if str(project_root) not in sys.path:
   sys.path.append(str(project_root))
 
 from src.autoencoder_model import TCNAutoencoder
-from src.config import DATA_DIR
+from src.config import DATA_DIR, CHANNELS
+from src.fault_injection import TelemetryFaultInjector
+
+
+def _inject_faults_for_training(
+    clean_windows: np.ndarray, fault_probability: float = 0.50, seed: int = 123
+) -> tuple:
+  """Augments clean windows with synthetic faults for multi-task training.
+
+  Args:
+      clean_windows: Shape (N, 5, 20) — clean Z-scored windows.
+      fault_probability: Fraction of windows to corrupt.
+      seed: Random seed for reproducibility.
+
+  Returns:
+      augmented_windows: Shape (N, 5, 20) — mix of clean and corrupted.
+      fault_labels: Shape (N,) — -1 for clean, 0-4 for fault channel index.
+  """
+  rng = np.random.default_rng(seed)
+  injector = TelemetryFaultInjector(seed=seed)
+  N = len(clean_windows)
+
+  augmented = clean_windows.copy()
+  labels = np.full(N, -1, dtype=np.int64)  # -1 = clean (no fault)
+
+  fault_types = ['dropout', 'stuck_value', 'drift', 'noise']
+
+  for i in range(N):
+    if rng.random() < fault_probability:
+      ch_idx = rng.integers(0, len(CHANNELS))
+      fault_type = rng.choice(fault_types)
+
+      # Extract the 1D time-series for the chosen channel: Shape (20,)
+      series = augmented[i, ch_idx, :].copy()
+
+      # Inject fault across the entire 20-step window
+      if fault_type == 'dropout':
+        series = injector.inject_dropout(series, start_idx=0, duration_idx=len(series))
+      elif fault_type == 'stuck_value':
+        series = injector.inject_stuck_value(series, start_idx=0, duration_idx=len(series))
+      elif fault_type == 'drift':
+        series = injector.inject_drift(series, start_idx=0, duration_idx=len(series), channel_name=CHANNELS[ch_idx])
+      else:
+        series = injector.inject_noise_burst(series, start_idx=0, duration_idx=len(series))
+
+      augmented[i, ch_idx, :] = series
+      labels[i] = ch_idx
+
+  n_faults = np.sum(labels >= 0)
+  print(f"  Fault augmentation: {n_faults}/{N} windows corrupted ({n_faults/N*100:.1f}%)")
+  return augmented, labels
 
 
 def train_stage2_autoencoder():
-  print("=== STARTING STAGE 2: TCN AUTOENCODER TRAINING ===")
+  print("=== STARTING STAGE 2: TCN AUTOENCODER TRAINING (FAULT-AWARE) ===")
 
   # 1. Hardware Selection
   device = torch.device(
@@ -157,66 +207,101 @@ def train_stage2_autoencoder():
   X_train_scaled = (X_train_raw - channel_means) / channel_stds
   print("Dataset Normalized successfully (Zero Mean, Unit Variance per Channel).")
 
-  # 4. Create PyTorch DataLoader
-  tensor_x = torch.tensor(X_train_scaled, dtype=torch.float32)
-  dataset = TensorDataset(tensor_x, tensor_x)
+  # 4. Fault-Aware Data Augmentation (Suggestion 6)
+  print("\nInjecting synthetic faults for multi-task training...")
+  X_augmented, fault_labels = _inject_faults_for_training(
+      X_train_scaled, fault_probability=0.50, seed=123
+  )
+
+  # 5. Create PyTorch DataLoader with fault labels
+  tensor_x_aug = torch.tensor(X_augmented, dtype=torch.float32)
+  tensor_x_clean = torch.tensor(X_train_scaled, dtype=torch.float32)  # Reconstruction target is always clean!
+  tensor_labels = torch.tensor(fault_labels, dtype=torch.long)
+
+  dataset = TensorDataset(tensor_x_aug, tensor_x_clean, tensor_labels)
 
   batch_size = 256
   dataloader = DataLoader(
       dataset, batch_size=batch_size, shuffle=True, drop_last=False
   )
 
-  # 5. Initialize the Dilated Causal TCN Autoencoder
-  # <-- UPGRADED: Aligned latent_dim to 4 to match upgraded model capacity!
-  model = TCNAutoencoder(num_channels=5, latent_dim=4, kernel_size=3).to(
+  # 6. Initialize the Dilated Causal TCN Autoencoder
+  # Suggestion 5: Widened latent_dim to 6 for better channel-specific preservation
+  model = TCNAutoencoder(num_channels=5, latent_dim=6, kernel_size=3).to(
       device
   )
 
-  # Optimizer, Loss Function, and Learning Rate Scheduler
+  # Optimizer, Loss Functions, and Learning Rate Scheduler
   optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-  criterion = nn.HuberLoss(delta=1.0)
-  epochs = 40
+  recon_criterion = nn.HuberLoss(delta=1.0)
+  class_criterion = nn.CrossEntropyLoss()
+  classification_weight = 0.3  # Lambda for multi-task balancing
 
-  # <-- UPGRADED: Smoothly decay LR to settle into laser-sharp baseline reconstructions!
+  # Suggestion 4: Increased epochs and lower LR floor
+  epochs = 100
   scheduler = optim.lr_scheduler.CosineAnnealingLR(
-      optimizer, T_max=epochs, eta_min=1e-6
+      optimizer, T_max=epochs, eta_min=1e-7
   )
 
-  print(f"\nBeginning training loop for {epochs} epochs...")
+  print(f"\nBeginning fault-aware training loop for {epochs} epochs...")
+  print(f"  Multi-task loss: L_recon + {classification_weight} * L_classify")
 
-  # 6. The Training Loop
+  # 7. The Training Loop (Multi-Task)
   model.train()
   for epoch in range(1, epochs + 1):
-    epoch_loss = 0.0
+    epoch_recon_loss = 0.0
+    epoch_class_loss = 0.0
+    epoch_total_loss = 0.0
 
-    for batch_x, target_x in dataloader:
-      batch_x = batch_x.to(device)
-      target_x = target_x.to(device)
+    for batch_aug, batch_clean, batch_labels in dataloader:
+      batch_aug = batch_aug.to(device)
+      batch_clean = batch_clean.to(device)
+      batch_labels = batch_labels.to(device)
 
       optimizer.zero_grad()
-      reconstructed, latent = model(batch_x)
 
-      loss = criterion(reconstructed, target_x)
-      loss.backward()
+      # Forward pass returns (reconstructed, latent, fault_logits)
+      reconstructed, latent, fault_logits = model(batch_aug)
+
+      # Reconstruction loss: compare reconstruction to CLEAN target
+      loss_recon = recon_criterion(reconstructed, batch_clean)
+
+      # Classification loss: only for fault-injected windows (label >= 0)
+      fault_mask = batch_labels >= 0
+      if fault_mask.any():
+        loss_class = class_criterion(
+            fault_logits[fault_mask], batch_labels[fault_mask]
+        )
+      else:
+        loss_class = torch.tensor(0.0, device=device)
+
+      total_loss = loss_recon + classification_weight * loss_class
+
+      total_loss.backward()
       optimizer.step()
 
-      epoch_loss += loss.item() * batch_x.size(0)
+      bs = batch_aug.size(0)
+      epoch_recon_loss += loss_recon.item() * bs
+      epoch_class_loss += loss_class.item() * bs
+      epoch_total_loss += total_loss.item() * bs
 
-    # Step the learning rate scheduler at the end of each epoch
     scheduler.step()
 
-    avg_loss = epoch_loss / len(dataset)
+    avg_recon = epoch_recon_loss / len(dataset)
+    avg_class = epoch_class_loss / len(dataset)
+    avg_total = epoch_total_loss / len(dataset)
     current_lr = scheduler.get_last_lr()[0]
 
-    if epoch % 5 == 0 or epoch == 1:
+    if epoch % 10 == 0 or epoch == 1:
       print(
-          f" -> Epoch [{epoch:02d}/{epochs}] | Train Loss (Huber):"
-          f" {avg_loss:.6f} | LR: {current_lr:.6f}"
+          f" -> Epoch [{epoch:03d}/{epochs}] | Recon: {avg_recon:.6f}"
+          f" | Class: {avg_class:.6f} | Total: {avg_total:.6f}"
+          f" | LR: {current_lr:.7f}"
       )
 
-  print("\nTraining Converged! Reconstructions are tight.")
+  print("\nTraining Converged! Fault-aware reconstructions are tight.")
 
-  # 7. Save the Model AND the Scaling Parameters
+  # 8. Save the Model AND the Scaling Parameters
   model_save_path = Path("models") / "stage2_tcn_ae.pth"
   model_save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -226,7 +311,7 @@ def train_stage2_autoencoder():
       "channel_stds": channel_stds,
       "architecture_config": {
           "num_channels": 5,
-          "latent_dim": 4,
+          "latent_dim": 6,
           "kernel_size": 3,
       },
   }
