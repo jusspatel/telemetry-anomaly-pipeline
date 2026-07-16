@@ -467,17 +467,12 @@ class TelemetryAnomalyOrchestrator:
       tensor_in = torch.tensor(scaled_window, dtype=torch.float32).to(
           self.device
       )
-      reconstructed_tensor, _, _ = self.tcn(tensor_in)
-      reconstructed_scaled = reconstructed_tensor.cpu().numpy()
-
-    abs_errors = np.abs(scaled_window[0] - reconstructed_scaled[0])
-    peak_errors = np.percentile(abs_errors, 95, axis=1)  # Shape: (5,)
-
-    epsilon = 0.1
-    normalized_scores = peak_errors / (self.difficulty_baseline + epsilon)
+      # Single forward pass: model computes reconstruction + error-based attribution
+      _, _, fault_logits = self.tcn(tensor_in)
+      fault_scores = fault_logits.cpu().numpy()[0]  # Shape: (5,)
 
     for idx, ch_name in enumerate(CHANNELS):
-      result["channel_residuals"][ch_name] = float(normalized_scores[idx])
+      result["channel_residuals"][ch_name] = float(fault_scores[idx])
 
     result["diagnosed_culprit"] = max(
         result["channel_residuals"], key=result["channel_residuals"].get
@@ -634,12 +629,11 @@ def run_rigorous_evaluation():
 
     y_true_binary.extend(lap_true_binary.tolist())
 
-    # Step F: VECTORIZED STAGE 2 INFERENCE VIA IMPROVED CERR
+    # Step F: SINGLE-PASS STAGE 2 INFERENCE VIA BUILT-IN ERROR ATTRIBUTION
     anomalous_indices = np.where(debounced_alerts == 1)[0]
 
     if len(anomalous_indices) > 0:
       batch_windows = windows[anomalous_indices]
-      Batch_Size = len(batch_windows)
 
       with torch.no_grad():
         scaled_batch = (batch_windows - orchestrator.means) / orchestrator.stds
@@ -647,46 +641,10 @@ def run_rigorous_evaluation():
             orchestrator.device
         )
 
-        # 1. Baseline forward pass -> Per-channel reconstruction error
-        base_recon, _, _ = orchestrator.tcn(tensor_in)
-        base_recon_np = base_recon.cpu().numpy()
-        # Per-channel error: sum of squared errors across time for each channel
-        base_per_channel_error = np.sum(
-            (scaled_batch - base_recon_np) ** 2, axis=2
-        )  # Shape: (Batch, 5)
-
-        # 2. Improved CERR: Mean-imputation occlusion + error measured against ORIGINAL
-        cerr_matrix = np.zeros((Batch_Size, len(CHANNELS)))
-
-        for c_idx in range(len(CHANNELS)):
-          occluded_batch = scaled_batch.copy()
-          # Fix 3: Mean-imputation instead of zero-occlusion
-          # Replace channel with its per-window time-mean (preserves DC, removes dynamics)
-          channel_means = np.mean(scaled_batch[:, c_idx, :], axis=1, keepdims=True)  # (Batch, 1)
-          occluded_batch[:, c_idx, :] = channel_means  # Broadcast across time
-
-          occ_tensor = torch.tensor(
-              occluded_batch, dtype=torch.float32
-          ).to(orchestrator.device)
-          occ_recon, _, _ = orchestrator.tcn(occ_tensor)
-          occ_recon_np = occ_recon.cpu().numpy()
-
-          # Fix 1: Measure error against ORIGINAL scaled_batch, not occluded
-          occ_per_channel_error = np.sum(
-              (scaled_batch - occ_recon_np) ** 2, axis=2
-          )  # Shape: (Batch, 5)
-
-          # Fix 2: Per-channel healing — how much did OTHER channels' errors drop?
-          # Mask out the occluded channel itself (its error will increase, which is expected)
-          healing = base_per_channel_error - occ_per_channel_error  # (Batch, 5)
-          # Sum healing across only the NON-occluded channels
-          mask = np.ones(len(CHANNELS), dtype=bool)
-          mask[c_idx] = False
-          cross_channel_healing = np.sum(healing[:, mask], axis=1)  # (Batch,)
-          cerr_matrix[:, c_idx] = cross_channel_healing
-
-      # 3. Diagnosed culprit = channel whose removal healed the other channels most
-      diagnosed_indices = np.argmax(cerr_matrix, axis=1)  # (Batch,)
+        # Single forward pass: model's error_head reads reconstruction error
+        # and directly predicts which channel is faulty
+        _, _, fault_logits = orchestrator.tcn(tensor_in)
+        diagnosed_indices = torch.argmax(fault_logits, dim=1).cpu().numpy()
 
       # Step G: Grade attributions against ground truth
       for idx_in_batch, w_idx in enumerate(anomalous_indices):

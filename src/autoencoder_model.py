@@ -268,35 +268,36 @@ class TCNAutoencoder(nn.Module):
     self.dec_out = CausalConv1d(32, num_channels, kernel_size=1, dilation=1)
 
     # =========================================================================
-    # FAULT CLASSIFIER HEAD (Suggestion 6): Predicts which channel is faulty
-    # Global Average Pool over time -> Linear -> GELU -> Dropout -> Linear
+    # ERROR ATTRIBUTION HEAD: Learns to identify the faulty channel directly
+    # from the reconstruction error tensor |X - X_hat|^2.
+    # Detached from encoder/decoder so classification cannot degrade reconstruction.
     # =========================================================================
-    self.fault_head = nn.Sequential(
-        nn.AdaptiveAvgPool1d(1),  # (Batch, latent_dim, Time) -> (Batch, latent_dim, 1)
-        nn.Flatten(),             # (Batch, latent_dim)
-        nn.Linear(latent_dim, 16),
+    self.error_head = nn.Sequential(
+        nn.Conv1d(num_channels, 16, kernel_size=3, padding=1),
         nn.GELU(),
-        nn.Dropout(0.2),
-        nn.Linear(16, num_channels),  # Output: 5-class logits
+        nn.Conv1d(16, 8, kernel_size=3, padding=1),
+        nn.GELU(),
+        nn.AdaptiveAvgPool1d(1),  # (Batch, 8, Time) -> (Batch, 8, 1)
+        nn.Flatten(),             # (Batch, 8)
+        nn.Linear(8, num_channels),  # Output: 5-class fault logits
     )
 
   def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    # Encode
     e1 = self.enc_block1(x)
     e2 = self.enc_block2(e1)
     latent = self.enc_bottleneck(e2)
 
+    # Decode
     d1 = self.dec_bottleneck(latent)
     d2 = self.dec_block1(d1)
     reconstructed = self.dec_out(d2)
 
-    # Fault classification from latent representation
-    fault_logits = self.fault_head(latent)  # Shape: (Batch, num_channels)
+    # Error-based fault attribution (detached so classification cannot degrade reconstruction!)
+    error_tensor = (x - reconstructed.detach()) ** 2  # Shape: (Batch, 5, 20)
+    fault_logits = self.error_head(error_tensor)       # Shape: (Batch, 5)
 
     return reconstructed, latent, fault_logits
-
-  def classify_fault(self, latent: torch.Tensor) -> torch.Tensor:
-    """Runs latent through the fault classifier head. Returns logits (Batch, num_channels)."""
-    return self.fault_head(latent)
 
   def localize_fault(
       self,
