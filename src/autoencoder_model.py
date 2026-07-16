@@ -224,6 +224,42 @@ class ResidualBlock(nn.Module):
     return out + res
 
 
+class MultiStatErrorHead(nn.Module):
+    """
+    Computes Max, Min, and Mean across time for both raw signals and reconstruction errors.
+    This gives the MLP perfect visibility into spikes, dropouts, and drifts without mixing channels.
+    """
+    def __init__(self, num_channels: int = 5):
+        super().__init__()
+        # Features per channel:
+        # Raw signal: max, min, mean (3 features)
+        # Error signal: max, mean (2 features) (min error is always ~0)
+        # Total: 5 features per channel -> 25 features total (for 5 channels)
+        self.mlp = nn.Sequential(
+            nn.Linear(num_channels * 5, 64),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, num_channels)
+        )
+        
+    def forward(self, x_raw: torch.Tensor, x_err: torch.Tensor) -> torch.Tensor:
+        # Shape inputs: (Batch, Channels, Time)
+        
+        # Raw signal stats
+        raw_max = torch.max(x_raw, dim=2)[0]  # (Batch, Channels)
+        raw_min = torch.min(x_raw, dim=2)[0]
+        raw_mean = torch.mean(x_raw, dim=2)
+        
+        # Error signal stats
+        err_max = torch.max(x_err, dim=2)[0]
+        err_mean = torch.mean(x_err, dim=2)
+        
+        # Concatenate all stats: (Batch, Channels * 5)
+        combined_stats = torch.cat([raw_max, raw_min, raw_mean, err_max, err_mean], dim=1)
+        
+        return self.mlp(combined_stats)
+
+
 class TCNAutoencoder(nn.Module):
   """Dilated Causal TCN Autoencoder with widened capacity (5 -> 32 -> 16 -> 6)."""
 
@@ -268,18 +304,10 @@ class TCNAutoencoder(nn.Module):
     self.dec_out = CausalConv1d(32, num_channels, kernel_size=1, dilation=1)
 
     # =========================================================================
-    # ERROR ATTRIBUTION HEAD: Learns to identify the faulty channel directly
-    # from the reconstruction error tensor and raw context.
+    # ERROR ATTRIBUTION HEAD (Upgraded: Multi-Stat Pooling)
     # Detached from encoder/decoder so classification cannot degrade reconstruction.
     # =========================================================================
-    self.error_head = nn.Sequential(
-        nn.AdaptiveMaxPool1d(1),   # Peak detector: (Batch, 10, Time) -> (Batch, 10, 1)
-        nn.Flatten(),              # (Batch, 10)
-        nn.Linear(num_channels * 2, 32),
-        nn.GELU(),
-        nn.Dropout(0.2),
-        nn.Linear(32, num_channels),  # Output: 5-class fault logits
-    )
+    self.error_head = MultiStatErrorHead(num_channels)
 
   def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     # Encode
@@ -296,9 +324,8 @@ class TCNAutoencoder(nn.Module):
     # Using Absolute Error (L1) instead of Squared Error (L2) for better neural network conditioning
     error_tensor = torch.abs(x - reconstructed.detach())  # Shape: (Batch, 5, 20)
     
-    # Suggestion 3: Provide raw context alongside the error signal
-    combined_context = torch.cat([x, error_tensor], dim=1) # Shape: (Batch, 10, 20)
-    fault_logits = self.error_head(combined_context)       # Shape: (Batch, 5)
+    # Pass raw context and error signal to extract Max, Min, and Mean stats
+    fault_logits = self.error_head(x, error_tensor)       # Shape: (Batch, 5)
 
     return reconstructed, latent, fault_logits
 

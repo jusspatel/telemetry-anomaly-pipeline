@@ -262,7 +262,7 @@ def train_stage2_autoencoder():
   classification_weight = 1.0  # Safe to increase: error_head is detached from reconstruction
 
   # Increased epochs and use ReduceLROnPlateau to prevent early stalling
-  epochs = 100
+  epochs = 150
   scheduler = optim.lr_scheduler.ReduceLROnPlateau(
       optimizer, mode='min', factor=0.5, patience=20, min_lr=1e-6
   )
