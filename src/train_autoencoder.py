@@ -226,8 +226,8 @@ def train_stage2_autoencoder():
   )
 
   # 6. Initialize the Dilated Causal TCN Autoencoder
-  # Suggestion 5: Widened latent_dim to 6 for better channel-specific preservation
-  model = TCNAutoencoder(num_channels=5, latent_dim=6, kernel_size=3).to(
+  # Suggestion 5: Bottleneck to force error spikes
+  model = TCNAutoencoder(num_channels=5, latent_dim=3, kernel_size=3).to(
       device
   )
 
@@ -311,7 +311,7 @@ def train_stage2_autoencoder():
       "channel_stds": channel_stds,
       "architecture_config": {
           "num_channels": 5,
-          "latent_dim": 6,
+          "latent_dim": 3,
           "kernel_size": 3,
       },
   }

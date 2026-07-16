@@ -230,7 +230,7 @@ class TCNAutoencoder(nn.Module):
   def __init__(
       self,
       num_channels: int = 5,
-      latent_dim: int = 6,  # <-- UPGRADED: Widened from 4 for better channel-specific preservation
+      latent_dim: int = 3,  # <-- UPGRADED: Strict bottleneck to force error spikes
       kernel_size: int = 3,
       dropout_rate: float = 0.1,
   ):
@@ -269,13 +269,13 @@ class TCNAutoencoder(nn.Module):
 
     # =========================================================================
     # ERROR ATTRIBUTION HEAD: Learns to identify the faulty channel directly
-    # from the reconstruction error tensor.
+    # from the reconstruction error tensor and raw context.
     # Detached from encoder/decoder so classification cannot degrade reconstruction.
     # =========================================================================
     self.error_head = nn.Sequential(
-        nn.AdaptiveAvgPool1d(1),   # Pool temporal errors: (Batch, 5, Time) -> (Batch, 5, 1)
-        nn.Flatten(),              # (Batch, 5)
-        nn.Linear(num_channels, 32),
+        nn.AdaptiveMaxPool1d(1),   # Peak detector: (Batch, 10, Time) -> (Batch, 10, 1)
+        nn.Flatten(),              # (Batch, 10)
+        nn.Linear(num_channels * 2, 32),
         nn.GELU(),
         nn.Dropout(0.2),
         nn.Linear(32, num_channels),  # Output: 5-class fault logits
@@ -295,7 +295,10 @@ class TCNAutoencoder(nn.Module):
     # Error-based fault attribution (detached so classification cannot degrade reconstruction!)
     # Using Absolute Error (L1) instead of Squared Error (L2) for better neural network conditioning
     error_tensor = torch.abs(x - reconstructed.detach())  # Shape: (Batch, 5, 20)
-    fault_logits = self.error_head(error_tensor)       # Shape: (Batch, 5)
+    
+    # Suggestion 3: Provide raw context alongside the error signal
+    combined_context = torch.cat([x, error_tensor], dim=1) # Shape: (Batch, 10, 20)
+    fault_logits = self.error_head(combined_context)       # Shape: (Batch, 5)
 
     return reconstructed, latent, fault_logits
 
