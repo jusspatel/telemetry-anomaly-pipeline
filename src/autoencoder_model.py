@@ -269,17 +269,16 @@ class TCNAutoencoder(nn.Module):
 
     # =========================================================================
     # ERROR ATTRIBUTION HEAD: Learns to identify the faulty channel directly
-    # from the reconstruction error tensor |X - X_hat|^2.
+    # from the reconstruction error tensor.
     # Detached from encoder/decoder so classification cannot degrade reconstruction.
     # =========================================================================
     self.error_head = nn.Sequential(
-        nn.Conv1d(num_channels, 16, kernel_size=3, padding=1),
+        nn.AdaptiveAvgPool1d(1),   # Pool temporal errors: (Batch, 5, Time) -> (Batch, 5, 1)
+        nn.Flatten(),              # (Batch, 5)
+        nn.Linear(num_channels, 32),
         nn.GELU(),
-        nn.Conv1d(16, 8, kernel_size=3, padding=1),
-        nn.GELU(),
-        nn.AdaptiveAvgPool1d(1),  # (Batch, 8, Time) -> (Batch, 8, 1)
-        nn.Flatten(),             # (Batch, 8)
-        nn.Linear(8, num_channels),  # Output: 5-class fault logits
+        nn.Dropout(0.2),
+        nn.Linear(32, num_channels),  # Output: 5-class fault logits
     )
 
   def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -294,7 +293,8 @@ class TCNAutoencoder(nn.Module):
     reconstructed = self.dec_out(d2)
 
     # Error-based fault attribution (detached so classification cannot degrade reconstruction!)
-    error_tensor = (x - reconstructed.detach()) ** 2  # Shape: (Batch, 5, 20)
+    # Using Absolute Error (L1) instead of Squared Error (L2) for better neural network conditioning
+    error_tensor = torch.abs(x - reconstructed.detach())  # Shape: (Batch, 5, 20)
     fault_logits = self.error_head(error_tensor)       # Shape: (Batch, 5)
 
     return reconstructed, latent, fault_logits

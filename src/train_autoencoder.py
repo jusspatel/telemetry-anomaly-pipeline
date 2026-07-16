@@ -235,7 +235,7 @@ def train_stage2_autoencoder():
   optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
   recon_criterion = nn.HuberLoss(delta=1.0)
   class_criterion = nn.CrossEntropyLoss()
-  classification_weight = 0.5  # Safe to increase: error_head is detached from reconstruction
+  classification_weight = 1.0  # Safe to increase: error_head is detached from reconstruction
 
   # Suggestion 4: Increased epochs and lower LR floor
   epochs = 100
