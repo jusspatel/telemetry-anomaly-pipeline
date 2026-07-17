@@ -183,15 +183,16 @@ def _inject_faults_for_training(
       # Extract the 1D time-series for the chosen channel: Shape (20,)
       series = augmented[i, ch_idx, :].copy()
 
-      # Inject fault across the entire 20-step window
+      # Inject fault across the entire 20-step window (in Z-SCORE space)
       if fault_type == 'dropout':
-        series = injector.inject_dropout(series, start_idx=0, duration_idx=len(series))
+        series[:] = -3.0  # Z-score dropout (extreme low)
       elif fault_type == 'stuck_value':
-        series = injector.inject_stuck_value(series, start_idx=0, duration_idx=len(series))
+        series[:] = series[0] + 2.0  # Stuck at a high offset
       elif fault_type == 'drift':
-        series = injector.inject_drift(series, start_idx=0, duration_idx=len(series), channel_name=CHANNELS[ch_idx])
-      else:
-        series = injector.inject_noise_burst(series, start_idx=0, duration_idx=len(series))
+        drift = np.linspace(0, 3.0, len(series))
+        series = series + drift
+      else: # noise
+        series = series + rng.normal(0, 1.5, len(series))
 
       augmented[i, ch_idx, :] = series
       labels[i] = ch_idx
@@ -302,7 +303,7 @@ def train_stage2_autoencoder():
       # Total Variation (TV) Penalty on Reconstruction
       # Forces the network to output smooth physical curves rather than jagged noise
       # Reverted TV penalty to 0.05 so the network is allowed to reconstruct dynamic slopes!
-      tv_lambda = 0.5
+      tv_lambda = 0.05
       loss_tv = torch.mean(torch.abs(reconstructed[:, :, 1:] - reconstructed[:, :, :-1]))
 
       total_loss = loss_recon + classification_weight * loss_class + tv_lambda * loss_tv

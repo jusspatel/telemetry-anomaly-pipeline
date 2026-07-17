@@ -210,6 +210,8 @@ class ResidualBlock(nn.Module):
     )
 
   def forward(self, x: torch.Tensor) -> torch.Tensor:
+    res = x if self.downsample is None else self.downsample(x)
+
     out = self.conv1(x)
     out = self.act1(out)
     out = self.dropout1(out)
@@ -218,8 +220,8 @@ class ResidualBlock(nn.Module):
     out = self.act2(out)
     out = self.dropout2(out)
 
-    # <-- UPGRADED: Removed skip connection entirely! Forces the signal to squeeze through the bottleneck.
-    return out
+    # Restored skip connection for stable training!
+    return out + res
 
 
 class MultiStatErrorHead(nn.Module):
@@ -282,19 +284,19 @@ class TCNAutoencoder(nn.Module):
     self.enc_block2 = ResidualBlock(
         32, 16, kernel_size, dilation=2, dropout_rate=dropout_rate
     )
-    self.enc_bottleneck = ResidualBlock(
-        16, latent_dim, kernel_size, dilation=4, dropout_rate=dropout_rate
+    # STRICT BOTTLENECK: No skip connection allowed here!
+    self.enc_bottleneck = nn.Sequential(
+        CausalConv1d(16, latent_dim, kernel_size, dilation=4),
+        nn.GELU()
     )
 
     # =========================================================================
     # DECODER: Mirror encoder expansion 6 -> 16 -> 32 -> 5
     # =========================================================================
-    self.dec_bottleneck = ResidualBlock(
-        latent_dim,
-        16,
-        kernel_size,
-        dilation=4,
-        dropout_rate=dropout_rate,
+    # STRICT BOTTLENECK: No skip connection allowed here!
+    self.dec_bottleneck = nn.Sequential(
+        CausalConv1d(latent_dim, 16, kernel_size, dilation=4),
+        nn.GELU()
     )
     self.dec_block1 = ResidualBlock(
         16, 32, kernel_size, dilation=2, dropout_rate=dropout_rate

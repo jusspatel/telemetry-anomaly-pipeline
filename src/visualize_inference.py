@@ -64,13 +64,14 @@ def visualize_inference():
         duration = len(series)
         
         if f_type == 'dropout':
-            series = injector.inject_dropout(series, 0, duration)
+            series[:] = -3.0  # Z-score dropout (extreme low)
         elif f_type == 'stuck_value':
-            series = injector.inject_stuck_value(series, 0, duration)
+            series[:] = series[0] + 2.0  # Stuck at a high offset
         elif f_type == 'drift':
-            series = injector.inject_drift(series, 0, duration, CHANNELS[ch_idx])
+            drift = np.linspace(0, 3.0, len(series))
+            series = series + drift
         else:
-            series = injector.inject_noise_burst(series, 0, duration)
+            series = series + np.random.default_rng(42).normal(0, 1.5, len(series))
             
         corrupted_windows[i, ch_idx, :] = series
         
