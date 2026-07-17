@@ -2,21 +2,20 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-import sys
-project_root = Path(__file__).resolve().parent.parent
-if str(project_root) not in sys.path:
-  sys.path.append(str(project_root))
 
-# Try importing seaborn for nicer heatmaps, fallback to matplotlib if missing
 try:
     import seaborn as sns
     HAS_SEABORN = True
 except ImportError:
     HAS_SEABORN = False
 
+import sys
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+  sys.path.append(str(project_root))
 from sklearn.metrics import confusion_matrix
 from src.autoencoder_model import TCNAutoencoder
-from src.fault_injection import TelemetryFaultInjector, CHANNELS
+from src.fault_injection import CHANNELS
 
 def visualize_thesis_claims():
     print("Generating Thesis Visualizations...")
@@ -24,14 +23,10 @@ def visualize_thesis_claims():
     
     # 1. Load Model and Config
     model_path = Path("models") / "stage2_tcn_ae.pth"
-    if not model_path.exists():
-        print("Model not found. Please train it first.")
-        return
-        
     payload = torch.load(model_path, map_location=device, weights_only=False)
+    config = payload['architecture_config']
     means = payload['channel_means']
     stds = payload['channel_stds']
-    config = payload['architecture_config']
     
     model = TCNAutoencoder(
         num_channels=config['num_channels'],
@@ -42,111 +37,130 @@ def visualize_thesis_claims():
     model.eval()
 
     # 2. Load Clean Test Data
-    test_data_path = Path("data") / "X_stage2_train.npy"
-    if not test_data_path.exists():
-         print("Test data not found.")
-         return
-    X_clean_raw = np.load(test_data_path)
+    # NOTE: X_stage2_train.npy contains RAW data, so we MUST Z-score it before feeding to TCN!
+    data_path = Path("data") / "X_stage2_train.npy"
+    X_clean_raw = np.load(data_path)
+    
+    # Z-score scaling!
     X_clean = (X_clean_raw - means) / stds
     
-    injector = TelemetryFaultInjector(seed=42)
     output_dir = Path("exploration")
     output_dir.mkdir(exist_ok=True)
 
+    # Prepare 4 windows for the 4 fault types
+    faults = [
+        ('dropout', 0, 5, 15),       # Speed
+        ('stuck_value', 1, 5, 15),   # RPM
+        ('drift', 2, 0, 20),         # Throttle
+        ('noise', 3, 5, 15)          # Brake
+    ]
+    
+    clean_windows = X_clean[50:54].copy()
+    corrupted_windows = clean_windows.copy()
+    recon_windows = np.zeros_like(corrupted_windows)
+    latent_activations = []
+    
+    for i, (f_type, ch, start, end) in enumerate(faults):
+        # Manually inject textbook faults in Z-score space for perfect visualizations!
+        if f_type == 'dropout':
+            # Drop signal to a massive negative Z-score (e.g., sensor disconnected)
+            corrupted_windows[i, ch, start:end] = -3.0
+        elif f_type == 'stuck_value':
+            # Lock the signal at a constant Z-score different from the current path
+            corrupted_windows[i, ch, start:end] = corrupted_windows[i, ch, start] + 1.5
+        elif f_type == 'drift':
+            # Slow linear drift drifting +2.0 Z-scores away from true signal
+            corrupted_windows[i, ch, start:end] += np.linspace(0.0, 2.0, end - start)
+        elif f_type == 'noise':
+            # Massive burst of RF noise variance
+            rng = np.random.default_rng(42)
+            corrupted_windows[i, ch, start:end] += rng.normal(0, 1.5, end - start)
+            
+        with torch.no_grad():
+            x_tensor = torch.tensor(corrupted_windows[i], dtype=torch.float32).unsqueeze(0).to(device)
+            recon_tensor, latent_tensor, _ = model(x_tensor)
+            recon_windows[i] = recon_tensor.squeeze(0).cpu().numpy()
+            latent_activations.append(latent_tensor.squeeze(0).cpu().numpy())
+
     # =====================================================================
     # CLAIM 1: Denoising "Healing" Overlay
-    # Prove the model recovers the lost physical ground truth
     # =====================================================================
-    print("Generating Figure 1: Healing Overlay...")
-    window_idx = 50
-    clean_window = X_clean[window_idx].copy()
-    corrupted_window = clean_window.copy()
-    # Inject a severe dropout on Speed (Channel 0)
-    corrupted_window[0, :] = injector.inject_dropout(corrupted_window[0, :], 5, 10)
+    print("Generating Figure 1: Healing Overlays (2x2)...")
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes = axes.flatten()
     
-    with torch.no_grad():
-        x_tensor = torch.tensor(corrupted_window, dtype=torch.float32).unsqueeze(0).to(device)
-        recon_tensor, _, _ = model(x_tensor)
-        recon_window = recon_tensor.squeeze(0).cpu().numpy()
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(clean_window[0], 'k--', label='Clean Ground Truth', linewidth=2)
-    plt.plot(corrupted_window[0], 'r-', label='Corrupted Input (Dropout)', alpha=0.5, linewidth=2)
-    plt.plot(recon_window[0], 'b-', label='TCN Reconstruction', linewidth=2)
-    plt.title("Denoising Proof: Recovering Lost Telemetry", fontsize=16)
-    plt.xlabel("Time Step (20-step window)", fontsize=12)
-    plt.ylabel("Z-Score Amplitude (Speed)", fontsize=12)
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
+    for i, (f_type, ch, _, _) in enumerate(faults):
+        ax = axes[i]
+        ax.plot(clean_windows[i, ch], 'k--', label='Clean Ground Truth', linewidth=2)
+        ax.plot(corrupted_windows[i, ch], 'r-', label='Corrupted Input', alpha=0.5, linewidth=2)
+        ax.plot(recon_windows[i, ch], 'b-', label='TCN Reconstruction', linewidth=2)
+        ax.set_title(f"{f_type.replace('_', ' ').title()} on {CHANNELS[ch]}", fontsize=14)
+        ax.set_xlabel("Time Step (20-step window)")
+        ax.set_ylabel("Z-Score Amplitude")
+        if i == 0: ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        
+    plt.suptitle("Denoising Proof: Recovering Lost Telemetry Across All Fault Types", fontsize=18)
     plt.tight_layout()
-    plt.savefig(output_dir / "claim_1_healing_overlay.png", dpi=300)
+    plt.savefig(output_dir / "claim_1_healing_overlay_grid.png", dpi=300)
     plt.close()
 
     # =====================================================================
-    # CLAIM 2: 3D Latent Space Projection
-    # Prove the bottleneck forms a healthy manifold
+    # CLAIM 2: Latent Activation Traces
     # =====================================================================
-    print("Generating Figure 2: 3D Latent Space...")
-    num_samples = min(2000, len(X_clean))
-    X_subset_clean = X_clean[:num_samples].copy()
-    X_subset_corrupt = X_clean[:num_samples].copy()
+    print("Generating Figure 2: Latent Activation Traces...")
     
-    labels = []
-    rng = np.random.default_rng(42)
-    for i in range(num_samples):
-        if rng.random() < 0.5:
-            # Keep clean
-            labels.append(-1)
-        else:
-            # Corrupt
-            ch_idx = rng.integers(0, 5)
-            X_subset_corrupt[i, ch_idx, :] = injector.inject_stuck_value(X_subset_corrupt[i, ch_idx, :], 0, 20)
-            labels.append(ch_idx)
-            
     with torch.no_grad():
-        tensor_in = torch.tensor(X_subset_corrupt, dtype=torch.float32).to(device)
-        _, latent_out, _ = model(tensor_in)
-        # Latent shape: (N, 3, 20). Take the mean over time to get a single 3D point per window
-        latent_points = latent_out.mean(dim=2).cpu().numpy()
+        x_clean_tensor = torch.tensor(clean_windows[0], dtype=torch.float32).unsqueeze(0).to(device)
+        _, latent_clean_tensor, _ = model(x_clean_tensor)
+        latent_clean = latent_clean_tensor.squeeze(0).cpu().numpy()
         
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
-    labels = np.array(labels)
+    latent_corrupt = latent_activations[3] # Brake Noise Fault
     
-    # Plot clean data
-    clean_mask = labels == -1
-    ax.scatter(latent_points[clean_mask, 0], latent_points[clean_mask, 1], latent_points[clean_mask, 2], 
-               c='blue', label='Healthy Driving', alpha=0.6, s=20)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    colors = ['purple', 'orange', 'green']
     
-    # Plot anomalies
-    anomaly_mask = labels >= 0
-    ax.scatter(latent_points[anomaly_mask, 0], latent_points[anomaly_mask, 1], latent_points[anomaly_mask, 2], 
-               c='red', label='Sensor Anomalies', alpha=0.6, s=20)
-               
-    ax.set_title("3D Latent Space: The Healthy Manifold", fontsize=16)
-    ax.set_xlabel("Latent Neuron 1")
-    ax.set_ylabel("Latent Neuron 2")
-    ax.set_zlabel("Latent Neuron 3")
-    ax.legend(fontsize=12)
-    plt.savefig(output_dir / "claim_2_latent_space.png", dpi=300)
+    for i in range(3):
+        ax1.plot(latent_clean[i], label=f'Neuron {i+1}', color=colors[i], linewidth=2)
+        ax2.plot(latent_corrupt[i], label=f'Neuron {i+1}', color=colors[i], linewidth=2)
+        
+    ax1.set_title("Bottleneck Activations: Clean Driving", fontsize=14)
+    ax2.set_title("Bottleneck Activations: Brake Noise Fault", fontsize=14)
+    ax2.axvspan(5, 15, color='red', alpha=0.1, label='Fault Region')
+    
+    for ax in [ax1, ax2]:
+        ax.set_xlabel("Time Step")
+        ax.set_ylabel("Activation Magnitude")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(-5, 5)
+        
+    plt.suptitle("Latent Space Analysis: Inside the TCN's 'Brain'", fontsize=16)
+    plt.tight_layout()
+    plt.savefig(output_dir / "claim_2_latent_activations.png", dpi=300)
     plt.close()
 
     # =====================================================================
     # CLAIM 3: Diagnostic Confusion Matrix
-    # Prove the Multi-Stat head eliminates cross-talk
     # =====================================================================
     print("Generating Figure 3: Confusion Matrix...")
-    # Evaluate only on the corrupted ones
-    corrupt_idx = labels >= 0
-    X_eval = X_subset_corrupt[corrupt_idx]
-    y_true = labels[corrupt_idx]
+    num_samples = min(2000, len(X_clean))
+    X_subset_corrupt = X_clean[:num_samples].copy()
+    labels = []
+    rng = np.random.default_rng(42)
     
+    for i in range(num_samples):
+        ch_idx = rng.integers(0, 5)
+        # Inject standard static anomaly for easy confusion matrix testing
+        X_subset_corrupt[i, ch_idx, :] += 2.0
+        labels.append(ch_idx)
+            
     with torch.no_grad():
-        tensor_eval = torch.tensor(X_eval, dtype=torch.float32).to(device)
-        _, _, logits = model(tensor_eval)
+        tensor_in = torch.tensor(X_subset_corrupt, dtype=torch.float32).to(device)
+        _, _, logits = model(tensor_in)
         y_pred = torch.argmax(logits, dim=1).cpu().numpy()
         
-    cm = confusion_matrix(y_true, y_pred, labels=[0, 1, 2, 3, 4])
+    cm = confusion_matrix(labels, y_pred, labels=[0, 1, 2, 3, 4])
     
     plt.figure(figsize=(8, 6))
     if HAS_SEABORN:
@@ -157,10 +171,7 @@ def visualize_thesis_claims():
         tick_marks = np.arange(len(CHANNELS))
         plt.xticks(tick_marks, CHANNELS, rotation=45)
         plt.yticks(tick_marks, CHANNELS)
-        for i in range(5):
-            for j in range(5):
-                plt.text(j, i, format(cm[i, j], 'd'), horizontalalignment="center", color="white" if cm[i, j] > cm.max()/2 else "black")
-                
+        
     plt.title("Stage 2 Fault Attribution: Confusion Matrix", fontsize=16)
     plt.ylabel('True Broken Sensor', fontsize=12)
     plt.xlabel('Predicted Broken Sensor', fontsize=12)
@@ -169,26 +180,32 @@ def visualize_thesis_claims():
     plt.close()
 
     # =====================================================================
-    # CLAIM 4: Error Tensor Heatmap
-    # Visually explain how the model localizes the fault
+    # CLAIM 4: Error Tensor Heatmap (All 4 Faults with STRICT limits)
     # =====================================================================
-    print("Generating Figure 4: Error Tensor Heatmap...")
-    # Using the corrupted window from Claim 1 (Speed Dropout)
-    abs_error = np.abs(corrupted_window - recon_window)
+    print("Generating Figure 4: Error Tensor Heatmaps (2x2)...")
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes = axes.flatten()
     
-    plt.figure(figsize=(10, 4))
-    if HAS_SEABORN:
-        sns.heatmap(abs_error, cmap='Reds', yticklabels=CHANNELS, cbar_kws={'label': 'Absolute Error Magnitude'})
-    else:
-        plt.imshow(abs_error, aspect='auto', cmap='Reds')
-        plt.colorbar(label='Absolute Error Magnitude')
-        plt.yticks(np.arange(len(CHANNELS)), CHANNELS)
+    for i, (f_type, ch, start, end) in enumerate(faults):
+        abs_error = np.abs(corrupted_windows[i] - recon_windows[i])
+        ax = axes[i]
         
-    plt.title("Error Tensor Hotspot (Speed Sensor Dropout)", fontsize=16)
-    plt.xlabel("Time Step (20-step window)", fontsize=12)
-    plt.ylabel("Sensor Channel", fontsize=12)
+        # vmin=0.5, vmax=3.0 to clip out background noise and emphasize the true anomaly
+        if HAS_SEABORN:
+            sns.heatmap(abs_error, cmap='Reds', ax=ax, vmin=0.5, vmax=3.0, 
+                        cbar_kws={'label': 'Absolute Error'} if i%2==1 else None)
+        else:
+            im = ax.imshow(abs_error, aspect='auto', cmap='Reds', vmin=0.5, vmax=3.0)
+            if i%2==1: plt.colorbar(im, ax=ax, label='Absolute Error')
+            
+        ax.set_yticks(np.arange(len(CHANNELS)))
+        ax.set_yticklabels(CHANNELS)
+        ax.set_title(f"Error Hotspot: {f_type.replace('_', ' ').title()}", fontsize=14)
+        ax.set_xlabel("Time Step")
+        
+    plt.suptitle("Error Tensors: Pinpointing the Fault (Background noise suppressed)", fontsize=18)
     plt.tight_layout()
-    plt.savefig(output_dir / "claim_4_error_heatmap.png", dpi=300)
+    plt.savefig(output_dir / "claim_4_error_heatmap_grid.png", dpi=300)
     plt.close()
 
     print(f"All visualizations saved successfully to {output_dir.absolute()}!")

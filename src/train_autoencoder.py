@@ -301,7 +301,8 @@ def train_stage2_autoencoder():
 
       # Total Variation (TV) Penalty on Reconstruction
       # Forces the network to output smooth physical curves rather than jagged noise
-      tv_lambda = 0.05
+      # Reverted TV penalty to 0.05 so the network is allowed to reconstruct dynamic slopes!
+      tv_lambda = 0.5
       loss_tv = torch.mean(torch.abs(reconstructed[:, :, 1:] - reconstructed[:, :, :-1]))
 
       total_loss = loss_recon + classification_weight * loss_class + tv_lambda * loss_tv

@@ -210,8 +210,6 @@ class ResidualBlock(nn.Module):
     )
 
   def forward(self, x: torch.Tensor) -> torch.Tensor:
-    res = x if self.downsample is None else self.downsample(x)
-
     out = self.conv1(x)
     out = self.act1(out)
     out = self.dropout1(out)
@@ -220,8 +218,8 @@ class ResidualBlock(nn.Module):
     out = self.act2(out)
     out = self.dropout2(out)
 
-    # <-- UPGRADED: Removed relu_out! Pure linear addition preserves negative Z-scores!
-    return out + res
+    # <-- UPGRADED: Removed skip connection entirely! Forces the signal to squeeze through the bottleneck.
+    return out
 
 
 class MultiStatErrorHead(nn.Module):
