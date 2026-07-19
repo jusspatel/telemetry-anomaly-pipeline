@@ -467,15 +467,14 @@ class TelemetryAnomalyOrchestrator:
       tensor_in = torch.tensor(scaled_window, dtype=torch.float32).to(
           self.device
       )
-      # Single forward pass: model computes reconstruction + error-based attribution
-      reconstructed, _, _ = self.tcn(tensor_in)
+      # Forward pass now extracts the trained classification logits
+      reconstructed, _, fault_logits = self.tcn(tensor_in)
       
-      # Combined Peak + AUC: Sum of Squared Errors (L2 Norm squared)
-      error_matrix = torch.abs(tensor_in - reconstructed).cpu().numpy()[0]
-      fault_scores = np.sum(error_matrix**2, axis=1) # Shape: (5,)
+      # Convert logits to probabilities using Softmax
+      probs = torch.nn.functional.softmax(fault_logits[0], dim=0).cpu().numpy()
 
     for idx, ch_name in enumerate(CHANNELS):
-      result["channel_residuals"][ch_name] = float(fault_scores[idx])
+      result["channel_residuals"][ch_name] = float(probs[idx])
 
     result["diagnosed_culprit"] = max(
         result["channel_residuals"], key=result["channel_residuals"].get

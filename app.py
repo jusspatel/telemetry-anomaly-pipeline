@@ -132,15 +132,13 @@ if page == "The Diagnostic Engine":
             # Run Inference directly through Stage 2
             with torch.no_grad():
                 tensor_in = torch.tensor(np.expand_dims(corrupted_scaled, 0), dtype=torch.float32).to(orchestrator.device)
-                reconstructed, _, _ = orchestrator.tcn(tensor_in)
+                reconstructed, _, fault_logits = orchestrator.tcn(tensor_in)
                 
                 recon_numpy = reconstructed.cpu().numpy()[0]
                 error_numpy = np.abs(corrupted_scaled - recon_numpy)
                 
-                # Combined Peak + AUC: Sum of Squared Errors (L2 Norm squared)
-                # Squaring the error heavily amplifies peak spikes, while the sum captures the AUC!
-                sse_errors = np.sum(error_numpy**2, axis=1)
-                probs = sse_errors / np.sum(sse_errors) # Normalize to 0-100%
+                # Use the trained neural network classification head!
+                probs = torch.nn.functional.softmax(fault_logits[0], dim=0).cpu().numpy()
                 
                 pred_idx = np.argmax(probs)
                 pred_sensor = CHANNELS[pred_idx]
@@ -449,10 +447,10 @@ elif page == "Sensitivity Analysis":
             scaled = (faulty_windows - orchestrator.means[0]) / orchestrator.stds[0]
             with torch.no_grad():
                 t_in = torch.tensor(scaled, dtype=torch.float32).to(orchestrator.device)
-                recon, _, _ = orchestrator.tcn(t_in)
-                err = np.abs(scaled - recon.cpu().numpy())
-                sse = np.sum(err**2, axis=2)
-            preds = np.argmax(sse, axis=1)
+                recon, _, fault_logits = orchestrator.tcn(t_in)
+                
+            # Use the trained neural network classification head instead of raw SSE
+            preds = torch.argmax(fault_logits, dim=1).cpu().numpy()
             target_idx = CHANNELS.index(target_sensor)
             return np.mean(preds == target_idx) * 100.0
 

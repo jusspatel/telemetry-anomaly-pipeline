@@ -3,3 +3,4 @@ src/__pycache__/*
 exploration/__pycache__/*
 models/*
 exploration/*.png
+*.pth

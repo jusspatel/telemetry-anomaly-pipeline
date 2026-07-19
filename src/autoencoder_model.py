@@ -266,7 +266,7 @@ class TCNAutoencoder(nn.Module):
   def __init__(
       self,
       num_channels: int = 5,
-      latent_dim: int = 3,  # <-- UPGRADED: Strict bottleneck to force error spikes
+      latent_dim: int = 2,  # <-- TIGHTENED BOTTLENECK: Forces true physics reconstruction
       kernel_size: int = 3,
       dropout_rate: float = 0.1,
   ):

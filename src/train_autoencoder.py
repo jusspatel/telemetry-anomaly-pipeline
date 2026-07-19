@@ -185,14 +185,20 @@ def _inject_faults_for_training(
 
       # Inject fault across the entire 20-step window (in Z-SCORE space)
       if fault_type == 'dropout':
-        series[:] = -3.0  # Z-score dropout (extreme low)
+        # Randomize dropout floor
+        series[:] = rng.uniform(-4.0, -2.0)  
       elif fault_type == 'stuck_value':
-        series[:] = series[0] + 2.0  # Stuck at a high offset
+        # Randomize stuck offset
+        series[:] = series[0] + rng.uniform(1.0, 4.0)  
       elif fault_type == 'drift':
-        drift = np.linspace(0, 3.0, len(series))
+        # Randomize drift magnitude and direction!
+        mag = rng.uniform(1.0, 4.0)
+        direction = rng.choice([-1.0, 1.0])
+        drift = np.linspace(0, mag * direction, len(series))
         series = series + drift
       else: # noise
-        series = series + rng.normal(0, 1.5, len(series))
+        # Randomize noise standard deviation
+        series = series + rng.normal(0, rng.uniform(1.0, 2.5), len(series))
 
       augmented[i, ch_idx, :] = series
       labels[i] = ch_idx
@@ -251,8 +257,8 @@ def train_stage2_autoencoder():
   )
 
   # 6. Initialize the Dilated Causal TCN Autoencoder
-  # Reverted: Strict bottleneck to force error spikes and prevent cross-talk
-  model = TCNAutoencoder(num_channels=5, latent_dim=3, kernel_size=3).to(
+  # UPGRADED: Strict bottleneck to force error spikes and prevent cross-talk
+  model = TCNAutoencoder(num_channels=5, latent_dim=2, kernel_size=3).to(
       device
   )
 
@@ -343,7 +349,7 @@ def train_stage2_autoencoder():
       "channel_stds": channel_stds,
       "architecture_config": {
           "num_channels": 5,
-          "latent_dim": 3,
+          "latent_dim": 2,
           "kernel_size": 3,
       },
   }
@@ -351,6 +357,5 @@ def train_stage2_autoencoder():
   torch.save(save_payload, model_save_path)
   print(f"=== STAGE 2 MODEL SAVED: {model_save_path} ===")
 
-
 if __name__ == "__main__":
-  train_stage2_autoencoder()
+    train_stage2_autoencoder()
