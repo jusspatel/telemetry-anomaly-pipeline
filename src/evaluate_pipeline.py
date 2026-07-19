@@ -468,8 +468,11 @@ class TelemetryAnomalyOrchestrator:
           self.device
       )
       # Single forward pass: model computes reconstruction + error-based attribution
-      _, _, fault_logits = self.tcn(tensor_in)
-      fault_scores = fault_logits.cpu().numpy()[0]  # Shape: (5,)
+      reconstructed, _, _ = self.tcn(tensor_in)
+      
+      # Combined Peak + AUC: Sum of Squared Errors (L2 Norm squared)
+      error_matrix = torch.abs(tensor_in - reconstructed).cpu().numpy()[0]
+      fault_scores = np.sum(error_matrix**2, axis=1) # Shape: (5,)
 
     for idx, ch_name in enumerate(CHANNELS):
       result["channel_residuals"][ch_name] = float(fault_scores[idx])
@@ -723,7 +726,21 @@ def run_rigorous_evaluation():
       "    (End-to-end reliability across all 2,048 injected fault windows)"
   )
   print("=======================================================\n")
-
+  
+  import json
+  metrics = {
+      "total_evaluated": 13140,
+      "total_injected": total_true_fault_windows,
+      "stage1_alerts": total_alerts,
+      "stage1_true_positives": stage1_true_positives,
+      "precision": f"{precision:.4f}",
+      "recall": f"{recall:.4f}",
+      "f1_score": f"{f1:.4f}",
+      "conditional_acc": f"{conditional_attribution_acc:.2f}%",
+      "system_acc": f"{system_attribution_acc:.2f}%"
+  }
+  with open("pipeline_metrics.json", "w") as f:
+      json.dump(metrics, f)
 
 if __name__ == "__main__":
   run_rigorous_evaluation()
