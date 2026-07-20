@@ -36,7 +36,7 @@ def load_track_data(track_name):
 # ==========================================
 # 2. STREAMLIT UI SETUP
 # ==========================================
-st.set_page_config(page_title="F1 Telemetry AI", layout="wide")
+st.set_page_config(page_title="F1 Telemetry Fault Detection", layout="wide")
 
 # Sidebar Navigation
 st.sidebar.title("Navigation")
