@@ -1,8 +1,13 @@
 import fastf1
 import pandas as pd
-from src.config import DATA_DIR,CHANNELS
+import tempfile
+import os
+from src.config import CHANNELS
 
-fastf1.Cache.enable_cache(str(DATA_DIR))
+# Use a safe temporary directory for the FastF1 cache (Fixes SQLite locking issues on Streamlit Cloud)
+cache_dir = os.path.join(tempfile.gettempdir(), "fastf1_cache")
+os.makedirs(cache_dir, exist_ok=True)
+fastf1.Cache.enable_cache(cache_dir)
 
 def load_clean_session_laps(year , gp , session_type , driver):
     print(f"Loading {year} {gp} - Session: {session_type} for Driver: {driver}...")
