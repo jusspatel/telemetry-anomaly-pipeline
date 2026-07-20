@@ -56,3 +56,39 @@ This repository is organized to separate the data pipeline, the core neural arch
         ├── evaluate_ablation.py         # Generates precision/recall metrics for the ablation charts
         └── profile_latency.py           # Evaluates the sub-millisecond inference speed of the models
 ```
+
+## 4. Training Methodology
+
+Because real-world Formula 1 telemetry rarely contains cleanly labeled hardware failures, this pipeline relies on a synthetic fault injection system (`fault_injection.py`) to train the Stage 2 Neural Network. 
+
+### 4.1. Randomized Physical Fault Injection
+To prevent target leakage and ensure the model learns underlying vehicle dynamics rather than fixed mathematical patterns, the training script (`train_autoencoder.py`) injects fully randomized, dynamic anomalies:
+*   **Drifts:** Linear deviation over a 20-timestep window.
+*   **Dropouts:** Sudden collapses to a 0.0 value for randomized durations.
+*   **Stuck Values:** Freezing a sensor at a static past value for randomized durations.
+*   **Noise:** Injecting randomized amplitude Gaussian noise scaled to the sensor's historical standard deviation.
+
+**Physical Clipping:** All synthetic anomalies are hard-clipped to respect physical constraints (e.g., Speed is clamped between 0 and 360 km/h, nGear is rounded strictly to integers 1-8). 
+
+### 4.2. Zero-Delta Injection Filtering
+When injecting randomized anomalies across the dataset, the system inevitably generates zero-delta injections—instances where the injected fault perfectly matches the natural, clean telemetry state.
+*   *Example 1:* Injecting a Brake dropout to 0.0 during a straightaway where the Brake value is naturally 0.0.
+*   *Example 2:* Injecting an nGear stuck value for 2 seconds while the vehicle maintains a constant gear without shifting.
+
+Evaluating the neural network on these zero-delta windows artificially penalizes the model for failing to diagnose an anomaly that resulted in no physical data variance. To resolve this, the benchmarking scripts (`evaluate_all_combinations.py` and `app.py`) feature a strict Physical Delta Check. This logic calculates the absolute sum difference between the clean window and the injected window; if the difference falls below a defined threshold (`1e-3`), the window is excluded from the accuracy calculation. This ensures the reported **83.67% Conditional Accuracy** exclusively reflects the model's diagnostic performance on true data variance.
+
+## 5. Getting Started & Installation
+*   **Requirements:** `pip install -r requirements.txt` (FastF1, PyTorch, Streamlit, Plotly, Pandas, Scikit-learn).
+*   **Training the Pipeline:**
+    1.  `python src/train_isolation_forest.py`
+    2.  `python src/train_autoencoder.py`
+*   **Benchmarking:**
+    1.  `python src/evaluate_pipeline.py`
+    2.  `python src/evaluate_all_combinations.py`
+
+## 6. The Interactive Dashboard (`app.py`)
+*   **Command:** `streamlit run app.py`
+*   **Features:**
+    *   **Live Injection Demo:** Manually slide fault severities and watch the AI attempt to heal the physical signal in real-time.
+    *   **2D Latent Space Explorer:** A live visual map showing how the AI organically clusters distinct physical faults in its 2-dimensional bottleneck.
+    *   **Interactive Sensitivity Curves:** A dynamic explorer to see exactly how subtle a physical drift or vibration can be before the AI loses its ability to diagnose it.

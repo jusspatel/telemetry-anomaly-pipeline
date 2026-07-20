@@ -4,3 +4,4 @@ exploration/__pycache__/*
 models/*
 exploration/*.png
 *.pth
+__pycache__/*
