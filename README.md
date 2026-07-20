@@ -94,6 +94,7 @@ Evaluating the neural network on these zero-delta windows artificially penalizes
 - **Benchmarking:**
   1.  `python src/evaluate_pipeline.py`
   2.  `python src/evaluate_all_combinations.py`
+  3.  `python src/evaluate_ablation.py`
 
 ## 6. The Interactive Dashboard (`app.py`)
 
