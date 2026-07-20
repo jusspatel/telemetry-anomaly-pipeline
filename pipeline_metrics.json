@@ -1,1 +1,1 @@
-{"total_evaluated": 13140, "total_injected": 2048, "stage1_alerts": 8554, "stage1_true_positives": 1751, "precision": "0.2047", "recall": "0.8550", "f1_score": "0.3303", "conditional_acc": "70.82%", "system_acc": "60.55%"}
+{"total_evaluated": 13140, "total_injected": 2048, "stage1_alerts": 8554, "stage1_true_positives": 1751, "precision": "0.2047", "recall": "0.8550", "f1_score": "0.3303", "conditional_acc": "83.67%", "system_acc": "71.53%"}

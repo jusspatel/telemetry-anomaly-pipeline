@@ -153,21 +153,16 @@ class FocalLoss(nn.Module):
 
 
 def _inject_faults_for_training(
-    clean_windows: np.ndarray, fault_probability: float = 0.50, seed: int = 123
+    clean_windows: np.ndarray,
+    channel_means: np.ndarray,
+    channel_stds: np.ndarray,
+    fault_probability: float = 0.35,
+    seed: int = 42,
 ) -> tuple:
-  """Augments clean windows with synthetic faults for multi-task training.
-
-  Args:
-      clean_windows: Shape (N, 5, 20) — clean Z-scored windows.
-      fault_probability: Fraction of windows to corrupt.
-      seed: Random seed for reproducibility.
-
-  Returns:
-      augmented_windows: Shape (N, 5, 20) — mix of clean and corrupted.
-      fault_labels: Shape (N,) — -1 for clean, 0-4 for fault channel index.
+  """
+  Inject synthetic telemetry faults into a batch of clean windows using True Physical Units!
   """
   rng = np.random.default_rng(seed)
-  injector = TelemetryFaultInjector(seed=seed)
   N = len(clean_windows)
 
   augmented = clean_windows.copy()
@@ -180,27 +175,61 @@ def _inject_faults_for_training(
       ch_idx = rng.integers(0, len(CHANNELS))
       fault_type = rng.choice(fault_types)
 
-      # Extract the 1D time-series for the chosen channel: Shape (20,)
-      series = augmented[i, ch_idx, :].copy()
+      # 1. Extract the Z-score series
+      series_z = augmented[i, ch_idx, :].copy()
 
-      # Inject fault across the entire 20-step window (in Z-SCORE space)
+      # 2. Un-normalize back to physical space
+      mean_val_global = channel_means[0, ch_idx, 0]
+      std_val_global = channel_stds[0, ch_idx, 0]
+      series_phys = (series_z * std_val_global) + mean_val_global
+      
+      original_phys = series_phys.copy()
+      target_sensor = CHANNELS[ch_idx]
+
+      # 3. Inject GENERIC PHYSICAL FAULTS (No Cheating!)
       if fault_type == 'dropout':
-        # Randomize dropout floor
-        series[:] = rng.uniform(-4.0, -2.0)  
+        # Drop to a random near-zero baseline, simulating a dead sensor or low voltage
+        series_phys[:] = rng.uniform(0.0, 2.0)
       elif fault_type == 'stuck_value':
-        # Randomize stuck offset
-        series[:] = series[0] + rng.uniform(1.0, 4.0)  
+        # Freeze at the initial value, possibly with a tiny randomized offset
+        series_phys[:] = series_phys[0] + rng.uniform(-1.0, 1.0)
       elif fault_type == 'drift':
-        # Randomize drift magnitude and direction!
-        mag = rng.uniform(1.0, 4.0)
-        direction = rng.choice([-1.0, 1.0])
-        drift = np.linspace(0, mag * direction, len(series))
-        series = series + drift
+        # Completely random physical drift magnitude (between 5 and 50 units)
+        drift_mag = rng.uniform(5.0, 50.0)
+        drift_dir = rng.choice([-1.0, 1.0])
+        
+        # Sometimes linear, sometimes slightly exponential/curved drift
+        curve_power = rng.uniform(0.8, 1.5)
+        base_curve = np.linspace(0, 1, len(series_phys)) ** curve_power
+        drift_amount = base_curve * drift_dir * drift_mag
+        
+        series_phys[:] = series_phys + drift_amount
       else: # noise
-        # Randomize noise standard deviation
-        series = series + rng.normal(0, rng.uniform(1.0, 2.5), len(series))
+        # Pure random Gaussian noise, completely detached from cosine vibration logic
+        noise_std = rng.uniform(std_val_global * 0.1, std_val_global * 0.8)
+        series_phys[:] = series_phys + rng.normal(0, noise_std, len(series_phys))
 
-      augmented[i, ch_idx, :] = series
+      # 4. Hard-clip to F1 physical bounds
+      if target_sensor == 'Speed':
+          series_phys[:] = np.clip(series_phys, 0, 360)
+      elif target_sensor == 'nGear':
+          series_phys[:] = np.clip(np.round(series_phys), 0, 8)
+      elif target_sensor in ['Throttle', 'Brake']:
+          series_phys[:] = np.clip(series_phys, 0, 100)
+      elif target_sensor == 'RPM':
+          series_phys[:] = np.clip(series_phys, 0, 13000)
+
+      # 5. PHYSICAL DELTA CHECK: Did we actually create an anomaly?
+      # e.g., Droping Brake to 0.0 when it was already 0.0 creates a ghost anomaly!
+      mse = np.mean((series_phys - original_phys) ** 2)
+      if mse < 1e-4:
+          # The injected fault physically changed nothing. Leave the label clean!
+          continue
+
+      # 6. Re-normalize to Z-score for the Neural Network
+      series_z = (series_phys - mean_val_global) / std_val_global
+      
+      augmented[i, ch_idx, :] = series_z
       labels[i] = ch_idx
 
   n_faults = np.sum(labels >= 0)
@@ -238,10 +267,10 @@ def train_stage2_autoencoder():
   X_train_scaled = (X_train_raw - channel_means) / channel_stds
   print("Dataset Normalized successfully (Zero Mean, Unit Variance per Channel).")
 
-  # 4. Fault-Aware Data Augmentation (Suggestion 6)
-  print("\nInjecting synthetic faults for multi-task training...")
+  # 4. Fault-Aware Data Augmentation
+  print("Injecting complex anomalies into training data...")
   X_augmented, fault_labels = _inject_faults_for_training(
-      X_train_scaled, fault_probability=0.50, seed=123
+      X_train_scaled, channel_means, channel_stds, fault_probability=0.35, seed=42
   )
 
   # 5. Create PyTorch DataLoader with fault labels

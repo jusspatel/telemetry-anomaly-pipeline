@@ -37,7 +37,6 @@ def load_track_data(track_name):
 # 2. STREAMLIT UI SETUP
 # ==========================================
 st.set_page_config(page_title="F1 Telemetry AI", layout="wide")
-st.title("🏎️ F1 Telemetry Anomaly Detection")
 
 # Sidebar Navigation
 st.sidebar.title("Navigation")
@@ -49,7 +48,7 @@ orchestrator = load_orchestrator()
 # 3. PAGE: THE DIAGNOSTIC ENGINE
 # ==========================================
 if page == "The Diagnostic Engine":
-    st.header("🧠 The Diagnostic Engine (Stage 2 Introspection)")
+    st.header("Diagnostic Engine (Stage 2)")
     st.markdown("Test the **TCN Autoencoder's** ability to heal data and diagnose the broken sensor on an unseen track.")
     
     col1, col2, col3 = st.columns(3)
@@ -63,7 +62,7 @@ if page == "The Diagnostic Engine":
     sim_time = st.slider("4. Select Lap Time to Inject Fault (seconds):", 20.0, 75.0, 30.0, 1.0, 
                          help="Scrub through the lap! If testing a Brake fault, find a braking zone. If testing a Throttle fault, find a corner exit.")
         
-    if st.button("🚀 Run Diagnosis", use_container_width=True):
+    if st.button("Run Diagnosis", use_container_width=True):
         with st.spinner(f"Fetching {track} telemetry and running AI..."):
             
             # Load data
@@ -161,7 +160,7 @@ if page == "The Diagnostic Engine":
             # 1. Corrupted Input
             ax1.plot(x_time, phys_corrupted, color='red', linewidth=3, label='Corrupted Input')
             ax1.plot(x_time, phys_clean, color='white', linestyle='--', alpha=0.5, label='True Signal')
-            ax1.set_title(f"1. What the AI Saw ({fault_type} on {target_sensor})", color='white')
+            ax1.set_title(f"1. Stage 2 saw({fault_type} on {target_sensor})", color='white')
             ax1.set_ylabel("Physical Value")
             ax1.legend()
             
@@ -176,7 +175,7 @@ if page == "The Diagnostic Engine":
             padding = sigma * 0.5
             ax2.set_ylim(y_min - padding, y_max + padding)
             
-            ax2.set_title("2. How the AI Healed It", color='white')
+            ax2.set_title("2. Attempted reconstruction", color='white')
             ax2.set_ylabel("Physical Value")
             ax2.legend()
             
@@ -186,7 +185,7 @@ if page == "The Diagnostic Engine":
             for i in range(5):
                 if i != ch_idx:
                     ax3.plot(x_time, error_numpy[i, :], color='gray', alpha=0.3)
-            ax3.set_title("3. The Error Signal (Z-Score space, what the AI sees)", color='white')
+            ax3.set_title("3. The Error Signal (Z-Score space)", color='white')
             ax3.set_ylabel("Absolute Z-Error")
             ax3.legend()
             
@@ -203,15 +202,15 @@ if page == "The Diagnostic Engine":
             if pred_sensor == target_sensor:
                 st.success(f"**CORRECT!** The Autoencoder successfully isolated the fault to the {target_sensor} sensor.")
             else:
-                st.error(f"**INCORRECT!** The Autoencoder got confused and blamed the {pred_sensor} sensor.")
+                st.error(f"**INCORRECT!** The Autoencoder blamed the {pred_sensor} sensor.")
 
 # ==========================================
 # 5. PAGE: PIPELINE METRICS
 # ==========================================
 elif page == "Pipeline Metrics":
-    st.header("📊 Pipeline Performance Metrics")
+    st.header("Pipeline Performance Metrics")
     # --- Pipeline Performance Metrics ---
-    st.markdown("### 📊 Production Evaluation Report (Jeddah 2023 Held-Out Set)")
+    st.markdown("Evaluation Report (Jeddah 2023 Held-Out Set)")
     
     # Load dynamic metrics
     import json
@@ -245,11 +244,11 @@ elif page == "Pipeline Metrics":
     
     c8, c9, c10 = st.columns(3)
     with c8:
-        st.metric(label="Stage 2: Inference Speed", value="5.6 ms / window", delta="Real-time Capable")
+        st.metric(label="Stage 2: Inference Speed", value="5.6 ms / window")
     with c9:
-        st.metric(label="Stage 2: Conditional Accuracy", value=metrics.get('conditional_acc', '76.41%'), delta="TCN Power", help="When Stage 1 caught a fault, how often did TCN name the broken sensor?")
+        st.metric(label="Stage 2: Conditional Accuracy", value=metrics.get('conditional_acc', '83.67%'), help="When Stage 1 caught a fault, how often did TCN name the broken sensor?")
     with c10:
-        st.metric(label="System-Wide Accuracy", value=metrics.get('system_acc', '65.33%'), delta="-11.08% Cascading Loss", delta_color="inverse", help="End-to-end reliability across all injected faults.")
+        st.metric(label="Stage 2: System-Wide Accuracy", value=metrics.get('system_acc', '71.53%'), help="End-to-end reliability across all injected faults.")
         
     st.divider()
     
@@ -262,7 +261,7 @@ elif page == "Pipeline Metrics":
             st.image(Image.open(img_path), caption="Live Ablation Benchmark Result", use_container_width=True)
             
     with col_text:
-        st.markdown("### 🏗️ Architecture Breakdown")
+        st.markdown("### Architecture Breakdown")
         st.markdown('''
         **Stage 1: The Gatekeeper (Isolation Forest)**
         * Designed for extreme speed and triage. It filters out 99% of normal telemetry so the neural network doesn't waste GPU cycles.
@@ -270,13 +269,13 @@ elif page == "Pipeline Metrics":
         
         **Stage 2: The Diagnostic Engine (TCN Autoencoder)**
         * A bottleneck neural network that learns the interconnected physics of a Formula 1 car (e.g., Throttle = 100% means Speed must be increasing).
-        * Upgraded with a **Sum of Squared Errors (SSE)** scoring mechanism that skyrocketed diagnostic accuracy to **67.5%**, completely dwarfing Stage 1's ability to isolate stealthy hardware failures.
+        * Upgraded with a **Neural Classification Head** and a hyper-compressed **2D Bottleneck** that skyrocketed diagnostic accuracy to **83.67%**, proving it can diagnose complex physical anomalies rather than just mathematical deviations.
         ''')
         
     st.divider()
     
-    st.header("🌌 3D Latent Space Topology")
-    st.markdown("Visualizing how the TCN Autoencoder natively untangles physics by compressing its 60-dimensional hidden bottlenecks into 3D space.")
+    st.header("2D Latent Spce")
+    st.markdown("Visualizing how the TCN Autoencoder natively untangles physics by compressing 100 data points (5 sensors x 20 timesteps) into a 2D map.")
     
     if True: # Auto-generate on page load so all 3 graphs display immediately
         import plotly.express as px
@@ -333,51 +332,55 @@ elif page == "Pipeline Metrics":
             
             with torch.no_grad():
                 tensor_in = torch.tensor(scaled_windows, dtype=torch.float32).to(orchestrator.device)
-                reconstructed, _, _ = orchestrator.tcn(tensor_in)
+                reconstructed, latent_repr, fault_logits = orchestrator.tcn(tensor_in)
                 
-                # Upgraded SSE Math: Calculate the Sum of Squared Errors for all 5 channels
+                # Reconstruction Error Matrix for the Hotspots
                 error_matrix = np.abs(scaled_windows - reconstructed.cpu().numpy())
-                sse_errors = np.sum(error_matrix**2, axis=2) # Shape: (Total Windows, 5)
                 
-            # Apply Logarithmic scaling to balance extreme variances
-            log_sse_errors = np.log1p(sse_errors)
-            
-            # We now have 4 different faults (plus Normal), creating a 5-Dimensional Error Space. 
-            # We use PCA to compress this 5D space down to 3D for visualization!
-            pca = PCA(n_components=3)
-            coords = pca.fit_transform(log_sse_errors)
+            # We now have 4 different faults (plus Normal).
+            # The TCN bottleneck compressed all 100 data points (5 sensors x 20 timesteps) into 2 spatial dimensions!
+            # We take the mean across the 20-timestep temporal window to plot a single stable point per window.
+            latent_np = latent_repr.cpu().numpy()
+            latent_np = np.mean(latent_np, axis=2)
             
             df = pd.DataFrame({
-                'PCA Component 1': coords[:, 0],
-                'PCA Component 2': coords[:, 1],
-                'PCA Component 3': coords[:, 2],
+                'Latent Dim 1': latent_np[:, 0],
+                'Latent Dim 2': latent_np[:, 1],
                 'Class': labels
             })
             
-            fig = px.scatter_3d(df, x='PCA Component 1', y='PCA Component 2', z='PCA Component 3', color='Class', 
-                                title="5D Error Space Compressed to 3D (PCA)",
-                                color_discrete_sequence=['#2ca02c', '#9467bd', '#ff7f0e', '#d62728', '#1f77b4'])
+            # --- Interactive UI Filter ---
+            unique_classes = df['Class'].unique()
+            selected_classes = st.multiselect(
+                "Filter Anomaly Classes:",
+                options=unique_classes,
+                default=unique_classes
+            )
             
-            fig.update_layout(scene=dict(xaxis=dict(showbackground=False),
-                                         yaxis=dict(showbackground=False),
-                                         zaxis=dict(showbackground=False)),
-                              paper_bgcolor="rgba(0,0,0,0)",
+            # Filter the dataframe based on user selection
+            filtered_df = df[df['Class'].isin(selected_classes)]
+            
+            fig = px.scatter(filtered_df, x='Latent Dim 1', y='Latent Dim 2', color='Class', 
+                                title="True 2D Physics Bottleneck (TCN Latent Space)",
+                                color_discrete_sequence=['#2ca02c', '#9467bd', '#ff7f0e', '#d62728', '#1f77b4'],
+                                category_orders={'Class': unique_classes}) # Keep colors consistent when filtering
+            
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)",
                               plot_bgcolor="rgba(0,0,0,0)",
                               margin=dict(l=0, r=0, b=0, t=30))
                               
             st.plotly_chart(fig, use_container_width=True)
             
-            st.success("Notice how the neural network maps different faults into entirely different mathematical directions! By applying PCA to the 5D Error Space, we can see that Drift, Noise, and Dropouts on different sensors explode into their own orthogonal clusters.")
+            st.success("Notice how the neural network maps different faults into entirely different regions of the physical latent space! By squeezing 100 telemetry data points into just 2 numbers, the AI is forced to create a literal map of F1 physics.")
 
             st.divider()
             
-            st.header("🎯 Diagnostic Confusion Matrix")
-            st.markdown("Evaluating the AI's ability to diagnose complex, stealthy anomalies (Noise, Drift, and Dropouts).")
+            st.header("Diagnostic Confusion Matrix")
             
-            # Extract ground truth and predictions for the 4 fault blocks (skipping n_clean normal windows)
+            # Extract ground truth and predictions using the NEW Classification Head (fault_logits)
             true_channels = ['RPM'] * n_fault + ['Throttle'] * n_fault + ['Brake'] * n_fault + ['Speed'] * n_fault
-            fault_sse = sse_errors[n_clean:]
-            fault_preds = [CHANNELS[i] for i in np.argmax(fault_sse, axis=1)]
+            fault_logits_np = fault_logits.cpu().numpy()[n_clean:]
+            fault_preds = [CHANNELS[i] for i in np.argmax(fault_logits_np, axis=1)]
             
             from sklearn.metrics import confusion_matrix
             cm = confusion_matrix(true_channels, fault_preds, labels=CHANNELS)
@@ -394,7 +397,7 @@ elif page == "Pipeline Metrics":
 
             st.divider()
             
-            st.header("🔥 Error Tensor Hotspots")
+            st.header("Error Tensor Hotspots")
             st.markdown("Visualizing exactly how the neural network 'sees' these advanced, stealthy anomalies across time.")
             
             col_err1, col_err2 = st.columns(2)
@@ -429,8 +432,8 @@ elif page == "Pipeline Metrics":
 # 6. PAGE: SENSITIVITY ANALYSIS
 # ==========================================
 elif page == "Sensitivity Analysis":
-    st.header("📈 Sensitivity Analysis Curves")
-    st.markdown("How subtle can a physical anomaly be before the neural network fails to diagnose it? This page dynamically sweeps through varying fault severities and mathematically plots the AI's diagnostic accuracy curve.")
+    st.header("Sensitivity Analysis Curves")
+    st.markdown("How subtle can a physical anomaly be before the neural network fails to diagnose it? ")
     
     with st.spinner("Simulating thousands of dynamic fault permutations..."):
         import plotly.express as px
@@ -438,13 +441,26 @@ elif page == "Sensitivity Analysis":
         live_lap = load_track_data("Melbourne")
         raw_matrix = live_lap[CHANNELS].values
         windows = sliding_window_view(raw_matrix, window_shape=WINDOW_SIZE, axis=0)
-        
         # Use 200 windows for evaluation
         clean_windows = windows[::2][:200]
         n_fault = len(clean_windows)
         
         def eval_accuracy(faulty_windows, target_sensor):
-            scaled = (faulty_windows - orchestrator.means[0]) / orchestrator.stds[0]
+            ch_idx = CHANNELS.index(target_sensor)
+            
+            # GHOST ANOMALY FILTER: Did the injection actually change the physics?
+            # If we inject a 'Stuck Value' into nGear when the car is already holding 4th gear, 
+            # the telemetry is mathematically identical to a clean window. We must ignore these!
+            diffs = np.sum(np.abs(faulty_windows[:, ch_idx, :] - clean_windows[:, ch_idx, :]), axis=1)
+            valid_mask = diffs > 1e-3
+            
+            # If the severity is so low (e.g., length=0) that NOTHING changed, accuracy is naturally 0%
+            if not np.any(valid_mask):
+                return 0.0
+                
+            valid_faulty = faulty_windows[valid_mask]
+            
+            scaled = (valid_faulty - orchestrator.means[0]) / orchestrator.stds[0]
             with torch.no_grad():
                 t_in = torch.tensor(scaled, dtype=torch.float32).to(orchestrator.device)
                 recon, _, fault_logits = orchestrator.tcn(t_in)
@@ -453,101 +469,87 @@ elif page == "Sensitivity Analysis":
             preds = torch.argmax(fault_logits, dim=1).cpu().numpy()
             target_idx = CHANNELS.index(target_sensor)
             return np.mean(preds == target_idx) * 100.0
-
-        # Sweep 1: Smart Throttle Drift Magnitude (0 to 100)
-        drift_mags = np.linspace(0, 100, 11)
-        drift_acc = []
-        for mag in drift_mags:
-            ch_idx = CHANNELS.index("Throttle")
-            faulty = np.copy(clean_windows)
             
-            # Apply Smart Drift logic per window
-            for i in range(len(faulty)):
-                series = faulty[i, ch_idx, :]
-                mean_val = np.mean(series)
-                
-                # If already high, drift downwards so it doesn't just instantly clip and become a "stuck value"
-                if mean_val > 50.0:
-                    drift_dir = -1.0 
-                else:
-                    drift_dir = 1.0
-                    
-                drift_amount = np.linspace(0, drift_dir * mag, 20)
-                faulty[i, ch_idx, :] += drift_amount
-                
-            faulty[:, ch_idx, :] = np.clip(faulty[:, ch_idx, :], 0, 100.0)
-            drift_acc.append(eval_accuracy(faulty, "Throttle"))
-            
-        # Sweep 2: Brake Mechanical Vibration (Scale Multiplier 0.0 to 1.0)
-        noise_mags = np.linspace(0.0, 1.0, 11)
-        noise_acc = []
-        for mag in noise_mags:
-            ch_idx = CHANNELS.index("Brake")
-            faulty = np.copy(clean_windows)
-            
-            # Mechanical vibration logic
-            global_sigma = orchestrator.stds[0][ch_idx][0]
-            noise_scale = global_sigma * mag  # Sweeping the severity multiplier
-            
-            t = np.arange(20)
-            vibration = np.cos(t * np.pi) * noise_scale # shape (20,)
-            random_amps = (np.random.default_rng().uniform(0.0, 1.3, (len(faulty), 20))) ** 2
-            
-            faulty[:, ch_idx, :] += (vibration * random_amps)
-            noise_acc.append(eval_accuracy(faulty, "Brake"))
-            
-        # Sweep 3: Speed Dropout Length (1 to 20 timesteps)
-        dropout_lens = np.arange(1, 21)
-        dropout_acc = []
-        for length in dropout_lens:
-            ch_idx = CHANNELS.index("Speed")
-            faulty = np.copy(clean_windows)
-            faulty[:, ch_idx, (20 - length):] = 0.0
-            dropout_acc.append(eval_accuracy(faulty, "Speed"))
-            
-        # Sweep 4: Gear Stuck Value Duration (1 to 20 timesteps)
-        stuck_lens = np.arange(1, 21)
-        stuck_acc = []
-        for length in stuck_lens:
-            ch_idx = CHANNELS.index("nGear")
-            faulty = np.copy(clean_windows)
-            for i in range(len(faulty)):
-                # Freeze the value at whatever it was just before the fault started
-                freeze_idx = max(0, 20 - length - 1)
-                stuck_val = faulty[i, ch_idx, freeze_idx]
-                faulty[i, ch_idx, (20 - length):] = stuck_val
-            stuck_acc.append(eval_accuracy(faulty, "nGear"))
-            
-        # --- Plotting ---
-        col1, col2 = st.columns(2)
-        col3, col4 = st.columns(2)
+        st.markdown("### Interactive Sensitivity Explorer")
+        st.markdown("Select any Sensor and Anomaly Type below to instantly compute how the Neural Network's diagnostic accuracy degrades as the physical anomaly becomes subtler.")
         
-        def style_fig(fig, y_range=[0, 105]):
-            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, b=0, t=30))
-            fig.update_traces(line=dict(width=4, color='#00ffcc'), marker=dict(size=8, color='#ff00ff'))
-            fig.update_yaxes(range=y_range)
-            return fig
-            
-        with col1:
-            fig1 = px.line(x=drift_mags, y=drift_acc, markers=True, 
-                           title="Smart Throttle Drift", 
-                           labels={'x': "Absolute Magnitude (%)", 'y': "Diagnostic Accuracy (%)"})
-            st.plotly_chart(style_fig(fig1, y_range=[50, 105]), use_container_width=True)
-            
-        with col2:
-            fig2 = px.line(x=noise_mags, y=noise_acc, markers=True,
-                           title="Brake Vibration Rattling",
-                           labels={'x': "Vibration Amplitude (x Sigma)", 'y': "Diagnostic Accuracy (%)"})
-            st.plotly_chart(style_fig(fig2, y_range=[75, 105]), use_container_width=True)
-            
-        with col3:
-            fig3 = px.line(x=dropout_lens, y=dropout_acc, markers=True,
-                           title="Speed Dropout",
-                           labels={'x': "Duration (Timesteps)", 'y': "Diagnostic Accuracy (%)"})
-            st.plotly_chart(style_fig(fig3, y_range=[0, 105]), use_container_width=True)
-            
-        with col4:
-            fig4 = px.line(x=stuck_lens, y=stuck_acc, markers=True,
-                           title="Gearbox Sensor Freeze",
-                           labels={'x': "Stuck Duration (Timesteps)", 'y': "Diagnostic Accuracy (%)"})
-            st.plotly_chart(style_fig(fig4, y_range=[53, 59]), use_container_width=True)
+        col_sel1, col_sel2 = st.columns(2)
+        with col_sel1:
+            target_sensor = st.selectbox("Select Sensor:", CHANNELS, index=0)
+        with col_sel2:
+            fault_type = st.selectbox("Select Anomaly Type:", ["Dropout (Length)", "Stuck Value (Length)", "Drift (Magnitude)", "Noise (Amplitude)"])
+
+        # Depending on selection, generate the curve dynamically!
+        if "Dropout" in fault_type:
+            x_vals = np.arange(1, 21)
+            x_label = "Dropout Duration (Timesteps)"
+            accuracies = []
+            for length in x_vals:
+                faulty = np.copy(clean_windows)
+                ch_idx = CHANNELS.index(target_sensor)
+                faulty[:, ch_idx, (20 - length):] = 0.0
+                accuracies.append(eval_accuracy(faulty, target_sensor))
+                
+        elif "Stuck Value" in fault_type:
+            x_vals = np.arange(1, 21)
+            x_label = "Stuck Value Duration (Timesteps)"
+            accuracies = []
+            for length in x_vals:
+                ch_idx = CHANNELS.index(target_sensor)
+                faulty = np.copy(clean_windows)
+                for i in range(len(faulty)):
+                    freeze_idx = max(0, 20 - length - 1)
+                    stuck_val = faulty[i, ch_idx, freeze_idx]
+                    faulty[i, ch_idx, (20 - length):] = stuck_val
+                accuracies.append(eval_accuracy(faulty, target_sensor))
+                
+        elif "Drift" in fault_type:
+            # Scale the drift magnitude sweep bounds based on the sensor's physical range
+            max_drift = 100 if target_sensor in ['Speed', 'Throttle', 'Brake'] else (2000 if target_sensor == 'RPM' else 5)
+            x_vals = np.linspace(0, max_drift, 11)
+            x_label = f"Drift Magnitude (Absolute Physics Delta)"
+            accuracies = []
+            for mag in x_vals:
+                ch_idx = CHANNELS.index(target_sensor)
+                faulty = np.copy(clean_windows)
+                for i in range(len(faulty)):
+                    series = faulty[i, ch_idx, :]
+                    mean_val = np.mean(series)
+                    drift_dir = -1.0 if mean_val > (max_drift / 2) else 1.0
+                    faulty[i, ch_idx, :] += np.linspace(0, drift_dir * mag, 20)
+                
+                # Hard clip to physical reality
+                if target_sensor == 'Speed': faulty[:, ch_idx, :] = np.clip(faulty[:, ch_idx, :], 0, 360)
+                elif target_sensor == 'nGear': faulty[:, ch_idx, :] = np.clip(np.round(faulty[:, ch_idx, :]), 0, 8)
+                elif target_sensor in ['Throttle', 'Brake']: faulty[:, ch_idx, :] = np.clip(faulty[:, ch_idx, :], 0, 100)
+                elif target_sensor == 'RPM': faulty[:, ch_idx, :] = np.clip(faulty[:, ch_idx, :], 0, 13000)
+                accuracies.append(eval_accuracy(faulty, target_sensor))
+                
+        elif "Noise" in fault_type:
+            x_vals = np.linspace(0.0, 2.0, 11)
+            x_label = "Noise Amplitude (x Standard Deviations)"
+            accuracies = []
+            for mag in x_vals:
+                ch_idx = CHANNELS.index(target_sensor)
+                faulty = np.copy(clean_windows)
+                global_sigma = orchestrator.stds[0][ch_idx][0]
+                
+                noise_std = global_sigma * mag
+                faulty[:, ch_idx, :] += np.random.normal(0, noise_std, faulty[:, ch_idx, :].shape)
+                
+                if target_sensor == 'Speed': faulty[:, ch_idx, :] = np.clip(faulty[:, ch_idx, :], 0, 360)
+                elif target_sensor == 'nGear': faulty[:, ch_idx, :] = np.clip(np.round(faulty[:, ch_idx, :]), 0, 8)
+                elif target_sensor in ['Throttle', 'Brake']: faulty[:, ch_idx, :] = np.clip(faulty[:, ch_idx, :], 0, 100)
+                elif target_sensor == 'RPM': faulty[:, ch_idx, :] = np.clip(faulty[:, ch_idx, :], 0, 13000)
+                accuracies.append(eval_accuracy(faulty, target_sensor))
+                
+        # --- Plot the Dynamic Interactive Curve ---
+        fig = px.line(x=x_vals, y=accuracies, markers=True,
+                       title=f"Sensitivity Curve: {target_sensor} {fault_type.split(' ')[0]}",
+                       labels={'x': x_label, 'y': "Diagnostic Accuracy (%)"})
+        
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, b=0, t=30))
+        fig.update_traces(line=dict(width=4, color='#00ffcc'), marker=dict(size=8, color='#ff00ff'))
+        fig.update_yaxes(range=[-5, 105])
+        
+        st.plotly_chart(fig, use_container_width=True)
