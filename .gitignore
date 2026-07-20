@@ -1,4 +1,6 @@
 src/__pycache__/*
 exploration/__pycache__/*
 exploration/*.png
+!exploration/ablation_results.png
+
 __pycache__/*
