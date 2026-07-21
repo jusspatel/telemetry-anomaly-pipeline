@@ -1,5 +1,7 @@
 # F1 Telemetry Anomaly Pipeline
 
+Live app : [F1 Telemetry Anomaly Pipeline](https://telemetryanomaly.streamlit.app/)
+
 ## 1.Project Overview
 
 - **The Problem**: Telemetry failures in sensors of F1 cars are difficult to isolate and diagnose because the sensors are deeply intterconnected. A single fault can create cascading alarms across all sensors.
