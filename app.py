@@ -44,21 +44,43 @@ page = st.sidebar.radio("Select View:", ["Project Overview", "The Diagnostic Eng
 
 orchestrator = load_orchestrator()
 
-# ==========================================
-# 3. PAGE: PROJECT OVERVIEW (README)
-# ==========================================
 if page == "Project Overview":
     readme_path = project_root / "README.md"
     if readme_path.exists():
         with open(readme_path, "r", encoding="utf-8") as f:
             readme_content = f.read()
-        st.markdown(readme_content)
+            
+        import re
+        # Find all markdown images: ![alt text](image_path)
+        pattern = r"!\[(.*?)\]\((.*?)\)"
+        matches = list(re.finditer(pattern, readme_content))
+        
+        if not matches:
+            st.markdown(readme_content)
+        else:
+            last_idx = 0
+            for match in matches:
+                st.markdown(readme_content[last_idx:match.start()])
+                
+                alt_text = match.group(1)
+                img_path = match.group(2)
+                
+                # Check if the image is a local file
+                full_img_path = project_root / img_path
+                if full_img_path.exists():
+                    st.image(str(full_img_path), caption=alt_text)
+                else:
+                    st.markdown(match.group(0))
+                
+                last_idx = match.end()
+            
+            # Render any remaining text after the last image
+            if last_idx < len(readme_content):
+                st.markdown(readme_content[last_idx:])
     else:
         st.error("README.md not found.")
 
-# ==========================================
-# 4. PAGE: THE DIAGNOSTIC ENGINE
-# ==========================================
+
 elif page == "The Diagnostic Engine":
     st.header("Diagnostic Engine (Stage 2)")
     st.markdown("Test the **TCN Autoencoder's** ability to heal data and diagnose the broken sensor on an unseen track.")
@@ -260,9 +282,7 @@ elif page == "The Diagnostic Engine":
             else:
                 st.error(f"**INCORRECT!** The Autoencoder blamed the {pred_sensor} sensor.")
 
-# ==========================================
-# 5. PAGE: PIPELINE METRICS
-# ==========================================
+
 elif page == "Pipeline Metrics":
     st.header("Pipeline Performance Metrics")
     # --- Pipeline Performance Metrics ---
@@ -508,9 +528,6 @@ elif page == "Pipeline Metrics":
             with col_err4:
                 st.plotly_chart(plot_error_heatmap(idx_brake, "Brake Sensor: Noise"), use_container_width=True)
 
-# ==========================================
-# 6. PAGE: SENSITIVITY ANALYSIS
-# ==========================================
 elif page == "Sensitivity Analysis":
     st.header("Sensitivity Analysis Curves")
     st.markdown("How subtle can a physical anomaly be before the neural network fails to diagnose it? ")
