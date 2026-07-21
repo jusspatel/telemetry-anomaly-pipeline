@@ -40,14 +40,26 @@ st.set_page_config(page_title="F1 Telemetry Fault Detection", layout="wide")
 
 # Sidebar Navigation
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Select View:", ["The Diagnostic Engine", "Pipeline Metrics", "Sensitivity Analysis"])
+page = st.sidebar.radio("Select View:", ["Project Overview", "The Diagnostic Engine", "Pipeline Metrics", "Sensitivity Analysis"])
 
 orchestrator = load_orchestrator()
 
 # ==========================================
-# 3. PAGE: THE DIAGNOSTIC ENGINE
+# 3. PAGE: PROJECT OVERVIEW (README)
 # ==========================================
-if page == "The Diagnostic Engine":
+if page == "Project Overview":
+    readme_path = project_root / "README.md"
+    if readme_path.exists():
+        with open(readme_path, "r", encoding="utf-8") as f:
+            readme_content = f.read()
+        st.markdown(readme_content)
+    else:
+        st.error("README.md not found.")
+
+# ==========================================
+# 4. PAGE: THE DIAGNOSTIC ENGINE
+# ==========================================
+elif page == "The Diagnostic Engine":
     st.header("Diagnostic Engine (Stage 2)")
     st.markdown("Test the **TCN Autoencoder's** ability to heal data and diagnose the broken sensor on an unseen track.")
     
