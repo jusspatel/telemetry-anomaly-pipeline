@@ -99,7 +99,11 @@ Evaluating the neural network on these zero-delta windows artificially penalizes
 ## 6. The Interactive Dashboard (`app.py`)
 
 - **Command:** `streamlit run app.py`
-- **Features:**
-  - **Live Injection Demo:** Manually slide fault severities and watch the AI attempt to heal the physical signal in real-time.
-  - **2D Latent Space Explorer:** A live visual map showing how the AI organically clusters distinct physical faults in its 2-dimensional bottleneck.
-  - **Interactive Sensitivity Curves:** A dynamic explorer to see exactly how subtle a physical drift or vibration can be before the AI loses its ability to diagnose it.
+- **Features (4 Main Views):**
+  - **Project Overview:** The default landing page displaying this documentation.
+  - **The Diagnostic Engine:** Select an unseen track, choose a target sensor to break, and use the slider to scrub through the lap time to inject a fault exactly where you want it. The TCN Autoencoder runs live to reconstruct the clean telemetry and diagnose the failure.
+  - **Pipeline Metrics:**
+    - **2D Latent Space Explorer:** A live visual map showing how the AI organically clusters distinct physical faults in its 2-dimensional bottleneck.
+    - **Diagnostic Confusion Matrix:** A detailed 20x5 heatmap evaluating the AI's diagnostic accuracy across all 20 possible sensor-fault combinations.
+    - **Error Tensor Hotspots:** Heatmaps showing exactly how the neural network "sees" stealthy anomalies across time.
+  - **Sensitivity Analysis:** Dynamic curves demonstrating exactly how subtle a physical drift or vibration can be before the neural network loses its ability to confidently diagnose it.
