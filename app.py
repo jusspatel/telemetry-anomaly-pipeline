@@ -420,23 +420,47 @@ elif page == "Pipeline Metrics":
             st.divider()
             
             st.header("Diagnostic Confusion Matrix")
+            st.markdown("Evaluating the neural classification head across all 20 possible sensor-fault combinations.")
             
-            # Extract ground truth and predictions using the NEW Classification Head (fault_logits)
-            true_channels = ['RPM'] * n_fault + ['Throttle'] * n_fault + ['Brake'] * n_fault + ['Speed'] * n_fault
-            fault_logits_np = fault_logits.cpu().numpy()[n_clean:]
-            fault_preds = [CHANNELS[i] for i in np.argmax(fault_logits_np, axis=1)]
+            def make_stuck(sensor_name, amount):
+                ch_idx = CHANNELS.index(sensor_name)
+                faulty = np.copy(clean_windows[:amount])
+                for i in range(len(faulty)):
+                    stuck_val = faulty[i, ch_idx, 0]
+                    faulty[i, ch_idx, :] = stuck_val + np.random.uniform(-0.5, 0.5, 20)
+                return faulty
             
-            from sklearn.metrics import confusion_matrix
-            cm = confusion_matrix(true_channels, fault_preds, labels=CHANNELS)
+            n_cm = min(50, n_clean)
+            all_cm_windows = []
+            cm_y_labels = []
             
-            # Subset the rows to only show the 4 faults we actively injected
-            cm_subset = cm[[CHANNELS.index('RPM'), CHANNELS.index('Throttle'), CHANNELS.index('Brake'), CHANNELS.index('Speed')], :]
+            for sensor in CHANNELS:
+                for f_type, func in [('Dropout', make_dropout), ('Stuck', make_stuck), ('Drift', make_drift), ('Noise', make_noise)]:
+                    cm_y_labels.append(f"{sensor} {f_type}")
+                    all_cm_windows.append(func(sensor, n_cm))
+                    
+            all_cm_windows = np.concatenate(all_cm_windows, axis=0)
+            scaled_cm = (all_cm_windows - orchestrator.means[0]) / orchestrator.stds[0]
             
-            fig_cm = px.imshow(cm_subset, x=CHANNELS, y=['RPM Noise', 'Throttle Drift', 'Brake Noise', 'Speed Dropout'], 
-                               labels=dict(x="AI Predicted Culprit", y="True Hardware Failure", color="Count"),
-                               text_auto=True, aspect="auto", color_continuous_scale="Reds")
+            with torch.no_grad():
+                tensor_cm = torch.tensor(scaled_cm, dtype=torch.float32).to(orchestrator.device)
+                _, _, cm_logits = orchestrator.tcn(tensor_cm)
             
-            fig_cm.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, b=0, t=30))
+            cm_preds = [CHANNELS[i] for i in np.argmax(cm_logits.cpu().numpy(), axis=1)]
+            
+            cm_matrix = np.zeros((20, 5))
+            for i in range(20):
+                combo_preds = cm_preds[i*n_cm : (i+1)*n_cm]
+                for pred in combo_preds:
+                    cm_matrix[i, CHANNELS.index(pred)] += 1
+            
+            cm_matrix_pct = (cm_matrix / n_cm) * 100
+            
+            fig_cm = px.imshow(cm_matrix_pct, x=CHANNELS, y=cm_y_labels, 
+                               labels=dict(x="AI Predicted Culprit", y="True Hardware Failure", color="Accuracy (%)"),
+                               text_auto=".1f", aspect="auto", color_continuous_scale="Reds")
+            
+            fig_cm.update_layout(height=650, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, b=0, t=30))
             st.plotly_chart(fig_cm, use_container_width=True)
 
             st.divider()
